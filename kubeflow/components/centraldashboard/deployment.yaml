@@ -15,6 +15,6 @@ spec:
     spec:
       containers:
         - name: centraldashboard
-          image: gcr.io/kubeflow-images-public/centraldashboard:v1.7.0
+          image: gcr.io/kubeflow-images-public/centraldashboard:v1.6.0
           ports:
             - containerPort: 8082
