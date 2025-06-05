@@ -1,0 +1,6 @@
+
+resources:
+  - components/centraldashboard/deployment.yaml
+  - components/centraldashboard/service.yaml
+  - components/pipelines/deployment.yaml
+  - components/pipelines/configmap.yaml

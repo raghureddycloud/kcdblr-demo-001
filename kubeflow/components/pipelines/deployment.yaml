@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kfp-api-server
+  namespace: kubeflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kfp-api-server
+  template:
+    metadata:
+      labels:
+        app: kfp-api-server
+    spec:
+      containers:
+        - name: kfp-api-server
+          image: gcr.io/ml-pipeline/api-server:2.0.0
+          ports:
+            - containerPort: 8888

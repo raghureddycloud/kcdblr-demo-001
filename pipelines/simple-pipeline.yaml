@@ -1,0 +1,17 @@
+import kfp
+from kfp import dsl
+
+@dsl.pipeline(
+    name="Demo Pipeline",
+    description="A simple demo pipeline"
+)
+def hello_pipeline():
+    op = dsl.ContainerOp(
+        name="echo",
+        image="busybox",
+        command=["sh", "-c"],
+        arguments=["echo Hello Kubeflow!"]
+    )
+
+if __name__ == "__main__":
+    kfp.compiler.Compiler().compile(hello_pipeline, 'hello-pipeline.yaml')
