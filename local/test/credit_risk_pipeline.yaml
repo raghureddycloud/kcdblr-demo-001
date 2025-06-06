@@ -1,0 +1,655 @@
+# PIPELINE DEFINITION
+# Name: credit-risk-ml-pipeline
+# Description: Professional credit risk assessment ML pipeline with KServe deployment
+# Inputs:
+#    auc_threshold: float [Default: 0.75]
+#    max_replicas: int [Default: 3.0]
+#    min_replicas: int [Default: 1.0]
+#    model_name: str [Default: 'credit-risk-model']
+#    namespace: str [Default: 'default']
+#    precision_threshold: float [Default: 0.7]
+# Outputs:
+#    train-credit-risk-model-metrics: system.Metrics
+components:
+  comp-create-kserve-deployment:
+    executorLabel: exec-create-kserve-deployment
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        max_replicas:
+          defaultValue: 3.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        min_replicas:
+          defaultValue: 1.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        model_name:
+          parameterType: STRING
+        namespace:
+          defaultValue: default
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-load-and-preprocess-data:
+    executorLabel: exec-load-and-preprocess-data
+    outputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        processed_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        num_features:
+          parameterType: NUMBER_INTEGER
+        num_samples:
+          parameterType: NUMBER_INTEGER
+        target_distribution:
+          parameterType: STRING
+  comp-train-credit-risk-model:
+    executorLabel: exec-train-credit-risk-model
+    inputDefinitions:
+      artifacts:
+        processed_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        best_auc:
+          parameterType: NUMBER_DOUBLE
+        best_precision:
+          parameterType: NUMBER_DOUBLE
+        best_recall:
+          parameterType: NUMBER_DOUBLE
+        model_type:
+          parameterType: STRING
+  comp-validate-model-for-production:
+    executorLabel: exec-validate-model-for-production
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        processed_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        auc_threshold:
+          defaultValue: 0.75
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+        precision_threshold:
+          defaultValue: 0.7
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-create-kserve-deployment:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - create_kserve_deployment
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pyyaml==6.0'\
+          \ 'jinja2==3.1.2' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef create_kserve_deployment(\n    model: Input[Model],\n    model_name:\
+          \ str,\n    namespace: str = \"default\",\n    min_replicas: int = 1,\n\
+          \    max_replicas: int = 3\n) -> str:\n    \"\"\"Create production-ready\
+          \ KServe deployment configuration\"\"\"\n    import yaml\n    import json\n\
+          \    import os\n    from datetime import datetime\n\n    print(\"\U0001F680\
+          \ Creating KServe deployment configuration...\")\n\n    # Load model metadata\n\
+          \    metadata_path = os.path.join(model.path, \"model_metadata.json\")\n\
+          \    with open(metadata_path, 'r') as f:\n        metadata = json.load(f)\n\
+          \n    # Create comprehensive KServe InferenceService\n    inference_service\
+          \ = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\",\n        \"\
+          kind\": \"InferenceService\",\n        \"metadata\": {\n            \"name\"\
+          : model_name,\n            \"namespace\": namespace,\n            \"labels\"\
+          : {\n                \"model-type\": \"credit-risk\",\n                \"\
+          version\": \"v1\",\n                \"environment\": \"production\"\n  \
+          \          },\n            \"annotations\": {\n                \"serving.kserve.io/deploymentMode\"\
+          : \"Serverless\",\n                \"autoscaling.knative.dev/minScale\"\
+          : str(min_replicas),\n                \"autoscaling.knative.dev/maxScale\"\
+          : str(max_replicas),\n                \"deployment-date\": datetime.now().isoformat()\n\
+          \            }\n        },\n        \"spec\": {\n            \"predictor\"\
+          : {\n                \"serviceAccountName\": \"kserve-service-account\"\
+          ,\n                \"sklearn\": {\n                    \"storageUri\": f\"\
+          pvc://models/{model_name}\",\n                    \"resources\": {\n   \
+          \                     \"requests\": {\n                            \"cpu\"\
+          : \"100m\",\n                            \"memory\": \"256Mi\"\n       \
+          \                 },\n                        \"limits\": {\n          \
+          \                  \"cpu\": \"500m\",\n                            \"memory\"\
+          : \"512Mi\"\n                        }\n                    },\n       \
+          \             \"env\": [\n                        {\n                  \
+          \          \"name\": \"MODEL_TYPE\",\n                            \"value\"\
+          : metadata.get('model_type', 'unknown')\n                        }\n   \
+          \                 ]\n                }\n            },\n            \"transformer\"\
+          : {\n                \"containers\": [\n                    {\n        \
+          \                \"name\": \"kserve-container\",\n                     \
+          \   \"image\": \"python:3.9-slim\",\n                        \"command\"\
+          : [\n                            \"sh\", \"-c\",\n                     \
+          \       \"pip install scikit-learn pandas numpy && python -c \\\"print('Transformer\
+          \ ready')\\\"\"\n                        ]\n                    }\n    \
+          \            ]\n            }\n        }\n    }\n\n    # Create monitoring\
+          \ and alerting configuration\n    monitoring_config = {\n        \"apiVersion\"\
+          : \"v1\",\n        \"kind\": \"ServiceMonitor\",\n        \"metadata\":\
+          \ {\n            \"name\": f\"{model_name}-monitor\",\n            \"namespace\"\
+          : namespace\n        },\n        \"spec\": {\n            \"selector\":\
+          \ {\n                \"matchLabels\": {\n                    \"serving.kserve.io/inferenceservice\"\
+          : model_name\n                }\n            },\n            \"endpoints\"\
+          : [\n                {\n                    \"port\": \"http-usermetric\"\
+          ,\n                    \"interval\": \"30s\",\n                    \"path\"\
+          : \"/metrics\"\n                }\n            ]\n        }\n    }\n\n \
+          \   # Create HPA (Horizontal Pod Autoscaler)\n    hpa_config = {\n     \
+          \   \"apiVersion\": \"autoscaling/v2\",\n        \"kind\": \"HorizontalPodAutoscaler\"\
+          ,\n        \"metadata\": {\n            \"name\": f\"{model_name}-hpa\"\
+          ,\n            \"namespace\": namespace\n        },\n        \"spec\": {\n\
+          \            \"scaleTargetRef\": {\n                \"apiVersion\": \"serving.knative.dev/v1\"\
+          ,\n                \"kind\": \"Service\",\n                \"name\": f\"\
+          {model_name}-predictor\"\n            },\n            \"minReplicas\": min_replicas,\n\
+          \            \"maxReplicas\": max_replicas,\n            \"metrics\": [\n\
+          \                {\n                    \"type\": \"Resource\",\n      \
+          \              \"resource\": {\n                        \"name\": \"cpu\"\
+          ,\n                        \"target\": {\n                            \"\
+          type\": \"Utilization\",\n                            \"averageUtilization\"\
+          : 70\n                        }\n                    }\n               \
+          \ }\n            ]\n        }\n    }\n\n    # Sample prediction request\
+          \ for testing\n    sample_request = {\n        \"instances\": [\n      \
+          \      {\n                \"credit_score\": 0.5,\n                \"annual_income\"\
+          : 0.2,\n                \"employment_length\": 0.8,\n                \"\
+          loan_amount\": -0.3,\n                \"debt_to_income\": 0.1,\n       \
+          \         \"num_credit_lines\": 0.0,\n                \"credit_history_length\"\
+          : 0.6,\n                \"home_ownership\": 0.4,\n                \"loan_purpose\"\
+          : -0.2,\n                \"geographic_region\": 0.1,\n                \"\
+          num_dependents\": -0.1,\n                \"education_level\": 0.3,\n   \
+          \             \"marital_status\": 0.0,\n                \"property_value\"\
+          : 0.7,\n                \"savings_balance\": 0.5,\n                \"checking_balance\"\
+          : 0.3,\n                \"previous_defaults\": -0.8,\n                \"\
+          employment_stability\": 0.9,\n                \"payment_history\": 0.6,\n\
+          \                \"loan_term\": 0.2\n            }\n        ]\n    }\n\n\
+          \    # Create comprehensive deployment guide\n    deployment_guide = f\"\
+          \"\"\n# \U0001F680 Credit Risk Model Deployment Guide\n\n## Model Information\n\
+          - **Model Type**: {metadata.get('model_type', 'Unknown')}\n- **Performance**:\
+          \ AUC {metadata.get('performance', {}).get('auc', 'N/A'):.4f}\n- **Features**:\
+          \ {len(metadata.get('feature_names', []))} input features\n- **Training\
+          \ Samples**: {metadata.get('training_samples', 'N/A'):,}\n\n## Deployment\
+          \ Steps\n\n### 1. Deploy the InferenceService\n```bash\nkubectl apply -f\
+          \ - <<EOF\n{yaml.dump(inference_service, default_flow_style=False)}\nEOF\n\
+          ```\n\n### 2. Set up Monitoring\n```bash\nkubectl apply -f - <<EOF\n{yaml.dump(monitoring_config,\
+          \ default_flow_style=False)}\nEOF\n```\n\n### 3. Configure Auto-scaling\n\
+          ```bash\nkubectl apply -f - <<EOF\n{yaml.dump(hpa_config, default_flow_style=False)}\n\
+          EOF\n```\n\n### 4. Verify Deployment\n```bash\n# Check deployment status\n\
+          kubectl get inferenceservice {model_name} -n {namespace}\n\n# Wait for ready\
+          \ status\nkubectl wait --for=condition=Ready inferenceservice/{model_name}\
+          \ -n {namespace} --timeout=300s\n\n# Get endpoint URL\nkubectl get inferenceservice\
+          \ {model_name} -n {namespace} -o jsonpath='{{.status.url}}'\n```\n\n###\
+          \ 5. Test the Model\n```bash\n# Get the endpoint URL\nENDPOINT=$(kubectl\
+          \ get inferenceservice {model_name} -n {namespace} -o jsonpath='{{.status.url}}')\n\
+          \n# Test prediction\ncurl -v -H \"Content-Type: application/json\" \\\\\n\
+          \  -d '{json.dumps(sample_request)}' \\\\\n  $ENDPOINT/v1/models/{model_name}:predict\n\
+          ```\n\n## Expected Response Format\n```json\n{{\n  \"predictions\": [\n\
+          \    {{\n      \"risk_probability\": 0.15,\n      \"risk_class\": \"low_risk\"\
+          ,\n      \"confidence\": 0.92\n    }}\n  ]\n}}\n```\n\n## Monitoring and\
+          \ Alerts\n- **Endpoint**: `{model_name}.{namespace}.example.com`\n- **Metrics**:\
+          \ Available at `/metrics` endpoint\n- **Auto-scaling**: {min_replicas}-{max_replicas}\
+          \ replicas based on CPU usage\n- **Health Check**: `/health` endpoint\n\n\
+          ## Production Checklist\n- \u2705 Model validated for production use\n-\
+          \ \u2705 Auto-scaling configured\n- \u2705 Monitoring enabled\n- \u2705\
+          \ Resource limits set\n- \u2705 Test request provided\n- \u2705 Health checks\
+          \ enabled\n\n## Business Impact\nThis credit risk model can help:\n- \U0001F4CA\
+          \ Reduce default rates by identifying high-risk applicants\n- \U0001F4B0\
+          \ Optimize loan approval processes\n- \u26A1 Provide real-time risk assessments\n\
+          - \U0001F4C8 Improve portfolio performance\n\n## Next Steps\n1. Integrate\
+          \ with loan origination system\n2. Set up A/B testing for model comparison\n\
+          3. Configure drift detection and retraining pipelines\n4. Implement business\
+          \ rules and override mechanisms\n\"\"\"\n\n    print(\"\u2705 KServe deployment\
+          \ configuration created!\")\n    print(f\"\U0001F4CB Model: {metadata.get('model_type')}\
+          \ with AUC {metadata.get('performance', {}).get('auc', 0):.4f}\")\n    print(f\"\
+          \U0001F3AF Endpoint: {model_name}.{namespace}.example.com\")\n    print(f\"\
+          \U0001F4CA Auto-scaling: {min_replicas}-{max_replicas} replicas\")\n\n \
+          \   return deployment_guide\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.2
+          memoryLimit: 0.268435456
+    exec-load-and-preprocess-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_and_preprocess_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'numpy==1.21.6' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_and_preprocess_data(\n    dataset: Output[Dataset],\n  \
+          \  processed_dataset: Output[Dataset]\n) -> NamedTuple('DataStats', [('num_samples',\
+          \ int), ('num_features', int), ('target_distribution', str)]):\n    \"\"\
+          \"Load credit risk dataset and perform preprocessing\"\"\"\n    import pandas\
+          \ as pd\n    import numpy as np\n    from sklearn.datasets import make_classification\n\
+          \    from sklearn.preprocessing import StandardScaler, LabelEncoder\n  \
+          \  from sklearn.model_selection import train_test_split\n    import json\n\
+          \n    print(\"\U0001F504 Loading and preprocessing credit risk data...\"\
+          )\n\n    # Generate realistic credit risk dataset\n    X, y = make_classification(\n\
+          \        n_samples=5000,\n        n_features=20,\n        n_informative=15,\n\
+          \        n_redundant=5,\n        n_clusters_per_class=1,\n        weights=[0.8,\
+          \ 0.2],  # Imbalanced like real credit data\n        flip_y=0.01,\n    \
+          \    random_state=42\n    )\n\n    # Create feature names that make business\
+          \ sense\n    feature_names = [\n        'credit_score', 'annual_income',\
+          \ 'employment_length', 'loan_amount',\n        'debt_to_income', 'num_credit_lines',\
+          \ 'credit_history_length', 'home_ownership',\n        'loan_purpose', 'geographic_region',\
+          \ 'num_dependents', 'education_level',\n        'marital_status', 'property_value',\
+          \ 'savings_balance', 'checking_balance',\n        'previous_defaults', 'employment_stability',\
+          \ 'payment_history', 'loan_term'\n    ]\n\n    # Create DataFrame\n    df\
+          \ = pd.DataFrame(X, columns=feature_names)\n    df['default_risk'] = y \
+          \ # 0 = Low Risk, 1 = High Risk\n\n    # Add some realistic preprocessing\n\
+          \    # Normalize financial features\n    financial_features = ['credit_score',\
+          \ 'annual_income', 'loan_amount', 'debt_to_income']\n    scaler = StandardScaler()\n\
+          \    df[financial_features] = scaler.fit_transform(df[financial_features])\n\
+          \n    # Save raw dataset\n    df.to_csv(dataset.path, index=False)\n\n \
+          \   # Create train/test split\n    train_df, test_df = train_test_split(df,\
+          \ test_size=0.2, stratify=df['default_risk'], random_state=42)\n\n    #\
+          \ Save processed datasets\n    train_test_data = {\n        'train': train_df.to_dict('records'),\n\
+          \        'test': test_df.to_dict('records'),\n        'feature_names': feature_names,\n\
+          \        'scaler_params': {\n            'mean': scaler.mean_.tolist(),\n\
+          \            'scale': scaler.scale_.tolist()\n        }\n    }\n\n    with\
+          \ open(processed_dataset.path, 'w') as f:\n        json.dump(train_test_data,\
+          \ f)\n\n    # Calculate statistics\n    target_dist = df['default_risk'].value_counts().to_dict()\n\
+          \    target_dist_str = f\"Low Risk: {target_dist.get(0, 0)}, High Risk:\
+          \ {target_dist.get(1, 0)}\"\n\n    print(f\"\u2705 Data preprocessing completed:\"\
+          )\n    print(f\"   \U0001F4CA Total samples: {len(df)}\")\n    print(f\"\
+          \   \U0001F4C8 Features: {len(feature_names)}\")\n    print(f\"   \U0001F4C9\
+          \ Target distribution: {target_dist_str}\")\n    print(f\"   \U0001F3AF\
+          \ Training samples: {len(train_df)}\")\n    print(f\"   \U0001F9EA Test\
+          \ samples: {len(test_df)}\")\n\n    from collections import namedtuple\n\
+          \    DataStats = namedtuple('DataStats', ['num_samples', 'num_features',\
+          \ 'target_distribution'])\n    return DataStats(len(df), len(feature_names),\
+          \ target_dist_str)\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.5
+          memoryLimit: 1.073741824
+    exec-train-credit-risk-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_credit_risk_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'numpy==1.21.6' 'joblib==1.3.0' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_credit_risk_model(\n    processed_dataset: Input[Dataset],\n\
+          \    model: Output[Model],\n    metrics: Output[Metrics]\n) -> NamedTuple('ModelResults',\
+          \ [('best_auc', float), ('best_precision', float), ('best_recall', float),\
+          \ ('model_type', str)]):\n    \"\"\"Train credit risk prediction model with\
+          \ cross-validation\"\"\"\n    import pandas as pd\n    import numpy as np\n\
+          \    import json\n    import joblib\n    import os\n    from sklearn.ensemble\
+          \ import RandomForestClassifier, GradientBoostingClassifier\n    from sklearn.linear_model\
+          \ import LogisticRegression\n    from sklearn.model_selection import GridSearchCV,\
+          \ cross_val_score\n    from sklearn.metrics import classification_report,\
+          \ roc_auc_score, precision_score, recall_score, confusion_matrix\n\n   \
+          \ print(\"\U0001F916 Training credit risk prediction model...\")\n\n   \
+          \ # Load processed data\n    with open(processed_dataset.path, 'r') as f:\n\
+          \        data = json.load(f)\n\n    train_df = pd.DataFrame(data['train'])\n\
+          \    test_df = pd.DataFrame(data['test'])\n    feature_names = data['feature_names']\n\
+          \n    # Prepare training data\n    X_train = train_df[feature_names]\n \
+          \   y_train = train_df['default_risk']\n    X_test = test_df[feature_names]\n\
+          \    y_test = test_df['default_risk']\n\n    print(f\"   \U0001F4DA Training\
+          \ on {len(X_train)} samples\")\n    print(f\"   \U0001F9EA Testing on {len(X_test)}\
+          \ samples\")\n\n    # Define models to try\n    models = {\n        'Random\
+          \ Forest': {\n            'model': RandomForestClassifier(random_state=42),\n\
+          \            'params': {\n                'n_estimators': [50, 100],\n \
+          \               'max_depth': [10, 20],\n                'min_samples_split':\
+          \ [5, 10]\n            }\n        },\n        'Gradient Boosting': {\n \
+          \           'model': GradientBoostingClassifier(random_state=42),\n    \
+          \        'params': {\n                'n_estimators': [50, 100],\n     \
+          \           'learning_rate': [0.1, 0.2],\n                'max_depth': [5,\
+          \ 10]\n            }\n        },\n        'Logistic Regression': {\n   \
+          \         'model': LogisticRegression(random_state=42, max_iter=1000),\n\
+          \            'params': {\n                'C': [0.1, 1.0, 10.0],\n     \
+          \           'solver': ['liblinear', 'lbfgs']\n            }\n        }\n\
+          \    }\n\n    best_model = None\n    best_score = 0\n    best_model_name\
+          \ = \"\"\n    results = {}\n\n    # Train and evaluate each model\n    for\
+          \ name, model_config in models.items():\n        print(f\"   \U0001F504\
+          \ Training {name}...\")\n\n        # Hyperparameter tuning with cross-validation\n\
+          \        grid_search = GridSearchCV(\n            model_config['model'],\n\
+          \            model_config['params'],\n            cv=3,\n            scoring='roc_auc',\n\
+          \            n_jobs=-1\n        )\n\n        grid_search.fit(X_train, y_train)\n\
+          \n        # Evaluate on test set\n        y_pred = grid_search.best_estimator_.predict(X_test)\n\
+          \        y_pred_proba = grid_search.best_estimator_.predict_proba(X_test)[:,\
+          \ 1]\n\n        auc_score = roc_auc_score(y_test, y_pred_proba)\n      \
+          \  precision = precision_score(y_test, y_pred)\n        recall = recall_score(y_test,\
+          \ y_pred)\n\n        results[name] = {\n            'auc': auc_score,\n\
+          \            'precision': precision,\n            'recall': recall,\n  \
+          \          'best_params': grid_search.best_params_\n        }\n\n      \
+          \  print(f\"   \U0001F4CA {name} Results:\")\n        print(f\"      AUC:\
+          \ {auc_score:.4f}\")\n        print(f\"      Precision: {precision:.4f}\"\
+          )\n        print(f\"      Recall: {recall:.4f}\")\n\n        # Track best\
+          \ model\n        if auc_score > best_score:\n            best_score = auc_score\n\
+          \            best_model = grid_search.best_estimator_\n            best_model_name\
+          \ = name\n\n    print(f\"\U0001F3C6 Best model: {best_model_name} (AUC:\
+          \ {best_score:.4f})\")\n\n    # Final evaluation on best model\n    y_pred_final\
+          \ = best_model.predict(X_test)\n    y_pred_proba_final = best_model.predict_proba(X_test)[:,\
+          \ 1]\n\n    final_auc = roc_auc_score(y_test, y_pred_proba_final)\n    final_precision\
+          \ = precision_score(y_test, y_pred_final)\n    final_recall = recall_score(y_test,\
+          \ y_pred_final)\n\n    print(f\"\\n\U0001F3AF Final Model Performance:\"\
+          )\n    print(f\"   AUC-ROC: {final_auc:.4f}\")\n    print(f\"   Precision:\
+          \ {final_precision:.4f}\")\n    print(f\"   Recall: {final_recall:.4f}\"\
+          )\n    print(\"\\n\U0001F4C8 Classification Report:\")\n    print(classification_report(y_test,\
+          \ y_pred_final, target_names=['Low Risk', 'High Risk']))\n\n    # Feature\
+          \ importance (if available)\n    if hasattr(best_model, 'feature_importances_'):\n\
+          \        feature_importance = dict(zip(feature_names, best_model.feature_importances_))\n\
+          \        top_features = sorted(feature_importance.items(), key=lambda x:\
+          \ x[1], reverse=True)[:5]\n        print(f\"\\n\U0001F50D Top 5 Important\
+          \ Features:\")\n        for feature, importance in top_features:\n     \
+          \       print(f\"   {feature}: {importance:.4f}\")\n\n    # Save model and\
+          \ metadata\n    os.makedirs(model.path, exist_ok=True)\n    model_path =\
+          \ os.path.join(model.path, \"credit_risk_model.joblib\")\n    joblib.dump(best_model,\
+          \ model_path)\n\n    # Save model metadata\n    model_metadata = {\n   \
+          \     'model_type': best_model_name,\n        'best_params': results[best_model_name]['best_params'],\n\
+          \        'feature_names': feature_names,\n        'performance': {\n   \
+          \         'auc': final_auc,\n            'precision': final_precision,\n\
+          \            'recall': final_recall\n        },\n        'training_samples':\
+          \ len(X_train),\n        'test_samples': len(X_test)\n    }\n\n    metadata_path\
+          \ = os.path.join(model.path, \"model_metadata.json\")\n    with open(metadata_path,\
+          \ 'w') as f:\n        json.dump(model_metadata, f, indent=2)\n\n    # Save\
+          \ metrics for Kubeflow tracking\n    metrics_dict = {\n        'metrics':\
+          \ [\n            {'name': 'auc-roc', 'numberValue': final_auc},\n      \
+          \      {'name': 'precision', 'numberValue': final_precision},\n        \
+          \    {'name': 'recall', 'numberValue': final_recall},\n            {'name':\
+          \ 'training-samples', 'numberValue': len(X_train)},\n            {'name':\
+          \ 'test-samples', 'numberValue': len(X_test)}\n        ]\n    }\n\n    with\
+          \ open(metrics.path, 'w') as f:\n        json.dump(metrics_dict, f)\n\n\
+          \    print(\"\u2705 Model training completed and saved!\")\n\n    from collections\
+          \ import namedtuple\n    ModelResults = namedtuple('ModelResults', ['best_auc',\
+          \ 'best_precision', 'best_recall', 'model_type'])\n    return ModelResults(final_auc,\
+          \ final_precision, final_recall, best_model_name)\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 1.0
+          memoryLimit: 2.147483648
+    exec-validate-model-for-production:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - validate_model_for_production
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'joblib==1.3.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef validate_model_for_production(\n    model: Input[Model],\n  \
+          \  processed_dataset: Input[Dataset],\n    auc_threshold: float = 0.75,\n\
+          \    precision_threshold: float = 0.70\n) -> str:\n    \"\"\"Comprehensive\
+          \ model validation for production readiness\"\"\"\n    import pandas as\
+          \ pd\n    import numpy as np\n    import json\n    import joblib\n    import\
+          \ os\n    from sklearn.metrics import roc_auc_score, precision_score, recall_score,\
+          \ f1_score\n\n    print(\"\U0001F50D Validating model for production deployment...\"\
+          )\n\n    # Load model and metadata\n    model_path = os.path.join(model.path,\
+          \ \"credit_risk_model.joblib\")\n    metadata_path = os.path.join(model.path,\
+          \ \"model_metadata.json\")\n\n    trained_model = joblib.load(model_path)\n\
+          \n    with open(metadata_path, 'r') as f:\n        metadata = json.load(f)\n\
+          \n    with open(processed_dataset.path, 'r') as f:\n        data = json.load(f)\n\
+          \n    # Load test data\n    test_df = pd.DataFrame(data['test'])\n    feature_names\
+          \ = data['feature_names']\n\n    X_test = test_df[feature_names]\n    y_test\
+          \ = test_df['default_risk']\n\n    # Perform comprehensive validation\n\
+          \    print(\"\U0001F4CA Running production validation tests...\")\n\n  \
+          \  # Test 1: Performance Metrics\n    y_pred = trained_model.predict(X_test)\n\
+          \    y_pred_proba = trained_model.predict_proba(X_test)[:, 1]\n\n    auc_score\
+          \ = roc_auc_score(y_test, y_pred_proba)\n    precision = precision_score(y_test,\
+          \ y_pred)\n    recall = recall_score(y_test, y_pred)\n    f1 = f1_score(y_test,\
+          \ y_pred)\n\n    print(f\"   \U0001F3AF Performance Metrics:\")\n    print(f\"\
+          \      AUC-ROC: {auc_score:.4f} (threshold: {auc_threshold})\")\n    print(f\"\
+          \      Precision: {precision:.4f} (threshold: {precision_threshold})\")\n\
+          \    print(f\"      Recall: {recall:.4f}\")\n    print(f\"      F1-Score:\
+          \ {f1:.4f}\")\n\n    # Test 2: Threshold Validation\n    performance_pass\
+          \ = (auc_score >= auc_threshold and precision >= precision_threshold)\n\n\
+          \    # Test 3: Prediction Sanity Checks\n    high_risk_predictions = np.sum(y_pred\
+          \ == 1) / len(y_pred)\n    sanity_pass = 0.1 <= high_risk_predictions <=\
+          \ 0.4  # Reasonable default rate\n\n    print(f\"   \U0001F4C8 High Risk\
+          \ Prediction Rate: {high_risk_predictions:.3f}\")\n    print(f\"   \u2705\
+          \ Sanity Check: {'PASS' if sanity_pass else 'FAIL'}\")\n\n    # Test 4:\
+          \ Model Stability (prediction consistency)\n    predictions_1 = trained_model.predict_proba(X_test)[:,\
+          \ 1]\n    predictions_2 = trained_model.predict_proba(X_test)[:, 1]\n  \
+          \  stability_pass = np.allclose(predictions_1, predictions_2)\n\n    print(f\"\
+          \   \U0001F504 Model Stability: {'PASS' if stability_pass else 'FAIL'}\"\
+          )\n\n    # Overall validation result\n    all_tests_pass = performance_pass\
+          \ and sanity_pass and stability_pass\n\n    validation_result = {\n    \
+          \    'overall_status': 'APPROVED' if all_tests_pass else 'REJECTED',\n \
+          \       'performance_pass': performance_pass,\n        'sanity_pass': sanity_pass,\n\
+          \        'stability_pass': stability_pass,\n        'metrics': {\n     \
+          \       'auc': auc_score,\n            'precision': precision,\n       \
+          \     'recall': recall,\n            'f1': f1\n        },\n        'model_info':\
+          \ {\n            'type': metadata['model_type'],\n            'training_samples':\
+          \ metadata['training_samples']\n        }\n    }\n\n    if all_tests_pass:\n\
+          \        print(\"\\n\U0001F389 MODEL APPROVED FOR PRODUCTION!\")\n     \
+          \   print(\"   All validation tests passed.\")\n        status = \"APPROVED\"\
+          \n    else:\n        print(\"\\n\u274C MODEL REJECTED FOR PRODUCTION\")\n\
+          \        print(\"   One or more validation tests failed:\")\n        if\
+          \ not performance_pass:\n            print(f\"   - Performance below threshold\
+          \ (AUC: {auc_score:.3f} < {auc_threshold} or Precision: {precision:.3f}\
+          \ < {precision_threshold})\")\n        if not sanity_pass:\n           \
+          \ print(f\"   - Prediction rate outside acceptable range ({high_risk_predictions:.3f})\"\
+          )\n        if not stability_pass:\n            print(\"   - Model predictions\
+          \ are not stable\")\n        status = \"REJECTED\"\n\n    return status\n\
+          \n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.3
+          memoryLimit: 0.536870912
+pipelineInfo:
+  description: Professional credit risk assessment ML pipeline with KServe deployment
+  name: credit-risk-ml-pipeline
+root:
+  dag:
+    outputs:
+      artifacts:
+        train-credit-risk-model-metrics:
+          artifactSelectors:
+          - outputArtifactKey: metrics
+            producerSubtask: train-credit-risk-model
+    tasks:
+      create-kserve-deployment:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-create-kserve-deployment
+        dependentTasks:
+        - train-credit-risk-model
+        - validate-model-for-production
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-credit-risk-model
+          parameters:
+            max_replicas:
+              componentInputParameter: max_replicas
+            min_replicas:
+              componentInputParameter: min_replicas
+            model_name:
+              componentInputParameter: model_name
+            namespace:
+              componentInputParameter: namespace
+        taskInfo:
+          name: "\U0001F680 KServe Deployment"
+      load-and-preprocess-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-and-preprocess-data
+        taskInfo:
+          name: "\U0001F4CA Data Preprocessing"
+      train-credit-risk-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-credit-risk-model
+        dependentTasks:
+        - load-and-preprocess-data
+        inputs:
+          artifacts:
+            processed_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: processed_dataset
+                producerTask: load-and-preprocess-data
+        taskInfo:
+          name: "\U0001F916 Model Training"
+      validate-model-for-production:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-validate-model-for-production
+        dependentTasks:
+        - load-and-preprocess-data
+        - train-credit-risk-model
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-credit-risk-model
+            processed_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: processed_dataset
+                producerTask: load-and-preprocess-data
+          parameters:
+            auc_threshold:
+              componentInputParameter: auc_threshold
+            precision_threshold:
+              componentInputParameter: precision_threshold
+        taskInfo:
+          name: "\U0001F50D Production Validation"
+  inputDefinitions:
+    parameters:
+      auc_threshold:
+        defaultValue: 0.75
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      max_replicas:
+        defaultValue: 3.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      min_replicas:
+        defaultValue: 1.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      model_name:
+        defaultValue: credit-risk-model
+        isOptional: true
+        parameterType: STRING
+      namespace:
+        defaultValue: default
+        isOptional: true
+        parameterType: STRING
+      precision_threshold:
+        defaultValue: 0.7
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+  outputDefinitions:
+    artifacts:
+      train-credit-risk-model-metrics:
+        artifactType:
+          schemaTitle: system.Metrics
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.5.0

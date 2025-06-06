@@ -1,0 +1,725 @@
+# PIPELINE DEFINITION
+# Name: iris-classification-pipeline
+# Description: Complete Iris classification pipeline: from data loading to production deployment
+# Inputs:
+#    accuracy_threshold: float [Default: 0.9]
+#    max_depth: int [Default: 3.0]
+#    model_name: str [Default: 'iris-classifier']
+#    n_estimators: int [Default: 100.0]
+#    namespace: str [Default: 'default']
+#    random_state: int [Default: 42.0]
+# Outputs:
+#    train-iris-model-metrics: system.Metrics
+components:
+  comp-create-iris-deployment:
+    executorLabel: exec-create-iris-deployment
+    inputDefinitions:
+      artifacts:
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        model_name:
+          defaultValue: iris-classifier
+          isOptional: true
+          parameterType: STRING
+        namespace:
+          defaultValue: default
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-load-iris-data:
+    executorLabel: exec-load-iris-data
+    outputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        class_names:
+          parameterType: STRING
+        num_features:
+          parameterType: NUMBER_INTEGER
+        num_samples:
+          parameterType: NUMBER_INTEGER
+  comp-test-iris-model:
+    executorLabel: exec-test-iris-model
+    inputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-train-iris-model:
+    executorLabel: exec-train-iris-model
+    inputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        max_depth:
+          defaultValue: 3.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        n_estimators:
+          defaultValue: 100.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        random_state:
+          defaultValue: 42.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        accuracy:
+          parameterType: NUMBER_DOUBLE
+        model_type:
+          parameterType: STRING
+        training_samples:
+          parameterType: NUMBER_INTEGER
+  comp-validate-iris-model:
+    executorLabel: exec-validate-iris-model
+    inputDefinitions:
+      artifacts:
+        dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        accuracy_threshold:
+          defaultValue: 0.9
+          isOptional: true
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-create-iris-deployment:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - create_iris_deployment
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pyyaml==6.0'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef create_iris_deployment(\n    model: Input[Model],\n    model_name:\
+          \ str = \"iris-classifier\",\n    namespace: str = \"default\"\n) -> str:\n\
+          \    \"\"\"Create KServe deployment configuration for Iris model\"\"\"\n\
+          \    import yaml\n    import json\n    import os\n    from datetime import\
+          \ datetime\n\n    print(\"\U0001F680 Creating KServe deployment for Iris\
+          \ classifier...\")\n\n    # Load model metadata\n    metadata_path = os.path.join(model.path,\
+          \ \"model_metadata.json\")\n    with open(metadata_path, 'r') as f:\n  \
+          \      metadata = json.load(f)\n\n    # Create KServe InferenceService\n\
+          \    inference_service = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\"\
+          ,\n        \"kind\": \"InferenceService\",\n        \"metadata\": {\n  \
+          \          \"name\": model_name,\n            \"namespace\": namespace,\n\
+          \            \"labels\": {\n                \"model-type\": \"iris-classifier\"\
+          ,\n                \"framework\": \"sklearn\",\n                \"version\"\
+          : \"v1\"\n            },\n            \"annotations\": {\n             \
+          \   \"deployment-date\": datetime.now().isoformat(),\n                \"\
+          model-accuracy\": f\"{metadata['accuracy']:.4f}\",\n                \"serving.kserve.io/deploymentMode\"\
+          : \"Serverless\"\n            }\n        },\n        \"spec\": {\n     \
+          \       \"predictor\": {\n                \"sklearn\": {\n             \
+          \       \"storageUri\": f\"pvc://models/{model_name}\",\n              \
+          \      \"resources\": {\n                        \"requests\": {\n     \
+          \                       \"cpu\": \"50m\",\n                            \"\
+          memory\": \"128Mi\"\n                        },\n                      \
+          \  \"limits\": {\n                            \"cpu\": \"200m\",\n     \
+          \                       \"memory\": \"256Mi\"\n                        }\n\
+          \                    }\n                }\n            }\n        }\n  \
+          \  }\n\n    # Sample requests for testing\n    sample_requests = [\n   \
+          \     {\n            \"description\": \"Setosa sample\",\n            \"\
+          input\": {\n                \"instances\": [[5.1, 3.5, 1.4, 0.2]]\n    \
+          \        },\n            \"expected\": \"setosa\"\n        },\n        {\n\
+          \            \"description\": \"Versicolor sample\", \n            \"input\"\
+          : {\n                \"instances\": [[7.0, 3.2, 4.7, 1.4]]\n           \
+          \ },\n            \"expected\": \"versicolor\"\n        },\n        {\n\
+          \            \"description\": \"Virginica sample\",\n            \"input\"\
+          : {\n                \"instances\": [[6.3, 3.3, 6.0, 2.5]]\n           \
+          \ },\n            \"expected\": \"virginica\"\n        }\n    ]\n\n    #\
+          \ Create comprehensive deployment guide\n    deployment_guide = f\"\"\"\n\
+          # \U0001F338 Iris Classification Model Deployment Guide\n\n## Model Information\n\
+          - **Accuracy**: {metadata['accuracy']:.4f}\n- **Model Type**: {metadata['model_type']}\n\
+          - **Features**: {', '.join(metadata['feature_names'])}\n- **Classes**: {',\
+          \ '.join(metadata['target_names'])}\n- **Training Samples**: {metadata['training_samples']}\n\
+          \n## KServe Deployment\n\n### 1. Deploy the InferenceService\n```yaml\n\
+          {yaml.dump(inference_service, default_flow_style=False)}\n```\n\n### 2.\
+          \ Apply the configuration\n```bash\n# Save the above YAML to iris-classifier.yaml\n\
+          kubectl apply -f iris-classifier.yaml\n\n# Check deployment status\nkubectl\
+          \ get inferenceservice {model_name} -n {namespace}\n\n# Wait for ready status\n\
+          kubectl wait --for=condition=Ready inferenceservice/{model_name} -n {namespace}\
+          \ --timeout=300s\n```\n\n### 3. Get the endpoint URL\n```bash\n# Get service\
+          \ URL\nkubectl get inferenceservice {model_name} -n {namespace} -o jsonpath='{{.status.url}}'\n\
+          ```\n\n### 4. Test the model\n\"\"\"\n\n    # Add sample requests\n    for\
+          \ i, sample in enumerate(sample_requests, 1):\n        deployment_guide\
+          \ += f\"\"\"\n#### Test {i}: {sample['description']}\n```bash\ncurl -v -H\
+          \ \"Content-Type: application/json\" \\\\\n  -d '{json.dumps(sample['input'])}'\
+          \ \\\\\n  $ENDPOINT/v1/models/{model_name}:predict\n```\nExpected: {sample['expected']}\n\
+          \n\"\"\"\n\n    deployment_guide += f\"\"\"\n## Expected Response Format\n\
+          ```json\n{{\n  \"predictions\": [\n    {{\n      \"class\": \"setosa\",\n\
+          \      \"probabilities\": [0.95, 0.03, 0.02],\n      \"confidence\": 0.95\n\
+          \    }}\n  ]\n}}\n```\n\n## Feature Input Format\nThe model expects 4 features\
+          \ in this order:\n1. **sepal length (cm)**: {metadata['feature_names'][0]}\n\
+          2. **sepal width (cm)**: {metadata['feature_names'][1]}  \n3. **petal length\
+          \ (cm)**: {metadata['feature_names'][2]}\n4. **petal width (cm)**: {metadata['feature_names'][3]}\n\
+          \n## Model Performance\n- **Overall Accuracy**: {metadata['accuracy']:.4f}\n\
+          - **Training Parameters**: \n  - n_estimators: {metadata['parameters']['n_estimators']}\n\
+          \  - max_depth: {metadata['parameters']['max_depth']}\n  - random_state:\
+          \ {metadata['parameters']['random_state']}\n\n## Feature Importance\n\"\"\
+          \"\n\n    # Add feature importance\n    for feature, importance in metadata['feature_importance'].items():\n\
+          \        deployment_guide += f\"- **{feature}**: {importance:.4f}\\n\"\n\
+          \n    deployment_guide += f\"\"\"\n\n## Class-specific Performance\n\"\"\
+          \"\n\n    # Add class accuracies if available\n    for class_name, accuracy\
+          \ in metadata.get('class_accuracy', {}).items():\n        deployment_guide\
+          \ += f\"- **{class_name}**: {accuracy:.4f}\\n\"\n\n    deployment_guide\
+          \ += f\"\"\"\n\n## Production Monitoring\n- **Endpoint Health**: `/health`\n\
+          - **Model Metadata**: `/v1/models/{model_name}/metadata`\n- **Metrics**:\
+          \ Available via Prometheus integration\n\n## Business Applications\nThis\
+          \ Iris classifier can be used for:\n- \U0001F52C Botanical research and\
+          \ species identification\n- \U0001F4DA Educational demonstrations of ML\
+          \ classification\n- \U0001F9EC Feature importance analysis in biological\
+          \ data\n- \U0001F916 Template for other multi-class classification problems\n\
+          \n## Next Steps\n1. Integrate with your application using the REST API\n\
+          2. Set up monitoring and alerting\n3. Consider A/B testing with different\
+          \ model versions\n4. Implement automated retraining pipelines\n\n\u2705\
+          \ Deployment ready! Your Iris classifier is production-ready.\n\"\"\"\n\n\
+          \    print(\"\u2705 KServe deployment configuration created!\")\n    print(f\"\
+          \U0001F4CB Model: {metadata['model_type']} with {metadata['accuracy']:.4f}\
+          \ accuracy\")\n    print(f\"\U0001F3AF Endpoint: {model_name}.{namespace}.example.com\"\
+          )\n    print(f\"\U0001F338 Classes: {', '.join(metadata['target_names'])}\"\
+          )\n\n    return deployment_guide\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.1
+          memoryLimit: 0.134217728
+    exec-load-iris-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_iris_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'numpy==1.21.6' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_iris_data(\n    dataset: Output[Dataset]\n) -> NamedTuple('DataInfo',\
+          \ [('num_samples', int), ('num_features', int), ('class_names', str)]):\n\
+          \    \"\"\"Load and preprocess the Iris dataset\"\"\"\n    import pandas\
+          \ as pd\n    import numpy as np\n    from sklearn.datasets import load_iris\n\
+          \    from sklearn.model_selection import train_test_split\n    import json\n\
+          \n    print(\"\U0001F338 Loading Iris dataset...\")\n\n    # Load the classic\
+          \ Iris dataset\n    iris = load_iris()\n    X = iris.data\n    y = iris.target\n\
+          \n    # Create DataFrame for better handling\n    df = pd.DataFrame(X, columns=iris.feature_names)\n\
+          \    df['target'] = y\n    df['species'] = df['target'].map({0: 'setosa',\
+          \ 1: 'versicolor', 2: 'virginica'})\n\n    print(f\"\U0001F4CA Dataset loaded\
+          \ successfully:\")\n    print(f\"   Shape: {df.shape}\")\n    print(f\"\
+          \   Features: {list(iris.feature_names)}\")\n    print(f\"   Classes: {list(iris.target_names)}\"\
+          )\n\n    # Display basic statistics\n    print(f\"\\n\U0001F4C8 Dataset\
+          \ Statistics:\")\n    print(f\"   Total samples: {len(df)}\")\n    print(f\"\
+          \   Features: {len(iris.feature_names)}\")\n    print(f\"   Classes: {len(iris.target_names)}\"\
+          )\n\n    # Show class distribution\n    class_distribution = df['species'].value_counts()\n\
+          \    print(f\"\\n\U0001F3AF Class Distribution:\")\n    for species, count\
+          \ in class_distribution.items():\n        print(f\"   {species}: {count}\
+          \ samples ({count/len(df)*100:.1f}%)\")\n\n    # Split the data into train/test\n\
+          \    X_train, X_test, y_train, y_test = train_test_split(\n        X, y,\
+          \ test_size=0.2, random_state=42, stratify=y\n    )\n\n    print(f\"\\n\u2702\
+          \uFE0F Train/Test Split:\")\n    print(f\"   Training samples: {len(X_train)}\"\
+          )\n    print(f\"   Test samples: {len(X_test)}\")\n\n    # Prepare data\
+          \ for saving\n    dataset_dict = {\n        'X_train': X_train.tolist(),\n\
+          \        'X_test': X_test.tolist(), \n        'y_train': y_train.tolist(),\n\
+          \        'y_test': y_test.tolist(),\n        'feature_names': iris.feature_names.tolist(),\n\
+          \        'target_names': iris.target_names.tolist(),\n        'dataset_info':\
+          \ {\n            'total_samples': len(df),\n            'n_features': len(iris.feature_names),\n\
+          \            'n_classes': len(iris.target_names),\n            'train_size':\
+          \ len(X_train),\n            'test_size': len(X_test)\n        }\n    }\n\
+          \n    # Save dataset\n    with open(dataset.path, 'w') as f:\n        json.dump(dataset_dict,\
+          \ f, indent=2)\n\n    print(\"\u2705 Data preprocessing completed!\")\n\n\
+          \    from collections import namedtuple\n    DataInfo = namedtuple('DataInfo',\
+          \ ['num_samples', 'num_features', 'class_names'])\n    return DataInfo(len(df),\
+          \ len(iris.feature_names), ', '.join(iris.target_names))\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.2
+          memoryLimit: 0.536870912
+    exec-test-iris-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - test_iris_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'joblib==1.3.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef test_iris_model(\n    dataset: Input[Dataset],\n    model: Input[Model]\n\
+          ) -> str:\n    \"\"\"Test the model with sample predictions\"\"\"\n    import\
+          \ pandas as pd\n    import numpy as np\n    import json\n    import joblib\n\
+          \    import os\n\n    print(\"\U0001F9EA Testing Iris model with sample\
+          \ predictions...\")\n\n    # Load model\n    model_file_path = os.path.join(model.path,\
+          \ \"iris_rf_model.joblib\")\n    trained_model = joblib.load(model_file_path)\n\
+          \n    # Load dataset info\n    with open(dataset.path, 'r') as f:\n    \
+          \    data = json.load(f)\n\n    feature_names = data['feature_names']\n\
+          \    target_names = data['target_names']\n    X_test = np.array(data['X_test'])\n\
+          \    y_test = np.array(data['y_test'])\n\n    print(f\"\U0001F338 Feature\
+          \ names: {feature_names}\")\n    print(f\"\U0001F3AF Classes: {target_names}\"\
+          )\n\n    # Test with some sample data points\n    sample_inputs = [\n  \
+          \      [5.1, 3.5, 1.4, 0.2],  # Typical Setosa\n        [7.0, 3.2, 4.7,\
+          \ 1.4],  # Typical Versicolor  \n        [6.3, 3.3, 6.0, 2.5],  # Typical\
+          \ Virginica\n    ]\n\n    expected_classes = ['setosa', 'versicolor', 'virginica']\n\
+          \n    print(f\"\\n\U0001F52C Sample Predictions:\")\n    print(f\"{'Input':<30}\
+          \ {'Predicted':<12} {'Probability':<25}\")\n    print(\"-\" * 70)\n\n  \
+          \  all_correct = True\n    for i, (sample, expected) in enumerate(zip(sample_inputs,\
+          \ expected_classes)):\n        # Make prediction\n        pred_class_idx\
+          \ = trained_model.predict([sample])[0]\n        pred_proba = trained_model.predict_proba([sample])[0]\n\
+          \        pred_class = target_names[pred_class_idx]\n\n        # Format input\n\
+          \        input_str = f\"[{', '.join([f'{x:.1f}' for x in sample])}]\"\n\
+          \        proba_str = f\"[{', '.join([f'{p:.3f}' for p in pred_proba])}]\"\
+          \n\n        print(f\"{input_str:<30} {pred_class:<12} {proba_str}\")\n\n\
+          \        if pred_class != expected:\n            all_correct = False\n \
+          \           print(f\"   \u26A0\uFE0F Expected: {expected}\")\n\n    # Test\
+          \ on actual test set samples\n    print(f\"\\n\U0001F4CA Test Set Performance:\"\
+          )\n    y_pred = trained_model.predict(X_test)\n    accuracy = np.mean(y_pred\
+          \ == y_test)\n    print(f\"   Test Accuracy: {accuracy:.4f}\")\n\n    #\
+          \ Show some correct and incorrect predictions\n    correct_mask = y_pred\
+          \ == y_test\n    incorrect_mask = ~correct_mask\n\n    print(f\"   Correct\
+          \ predictions: {np.sum(correct_mask)}/{len(y_test)}\")\n    print(f\"  \
+          \ Incorrect predictions: {np.sum(incorrect_mask)}/{len(y_test)}\")\n\n \
+          \   if np.sum(incorrect_mask) > 0:\n        print(f\"\\n\u274C Misclassified\
+          \ examples:\")\n        incorrect_indices = np.where(incorrect_mask)[0][:3]\
+          \  # Show first 3\n        for idx in incorrect_indices:\n            true_class\
+          \ = target_names[y_test[idx]]\n            pred_class = target_names[y_pred[idx]]\n\
+          \            features = X_test[idx]\n            print(f\"   True: {true_class},\
+          \ Predicted: {pred_class}, Features: {features}\")\n\n    # Feature importance\
+          \ explanation\n    feature_importance = trained_model.feature_importances_\n\
+          \    print(f\"\\n\U0001F31F Feature Importance (for interpretability):\"\
+          )\n    importance_pairs = list(zip(feature_names, feature_importance))\n\
+          \    importance_pairs.sort(key=lambda x: x[1], reverse=True)\n\n    for\
+          \ feature, importance in importance_pairs:\n        print(f\"   {feature}:\
+          \ {importance:.4f}\")\n\n    test_summary = f\"\"\"\n\U0001F9EA MODEL TESTING\
+          \ SUMMARY:\n\n\u2705 Sample Prediction Tests: {'PASSED' if all_correct else\
+          \ 'NEEDS REVIEW'}\n\U0001F4CA Test Set Accuracy: {accuracy:.4f}\n\U0001F50D\
+          \ Total Test Samples: {len(y_test)}\n\u2705 Correct Predictions: {np.sum(correct_mask)}\n\
+          \u274C Incorrect Predictions: {np.sum(incorrect_mask)}\n\n\U0001F31F Most\
+          \ Important Features:\n   1. {importance_pairs[0][0]}: {importance_pairs[0][1]:.4f}\n\
+          \   2. {importance_pairs[1][0]}: {importance_pairs[1][1]:.4f}\n   3. {importance_pairs[2][0]}:\
+          \ {importance_pairs[2][1]:.4f}\n\n\U0001F3AF Model is ready for deployment!\n\
+          Next step: Create KServe InferenceService for production use.\n\"\"\"\n\n\
+          \    print(test_summary)\n    return test_summary\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.2
+          memoryLimit: 0.268435456
+    exec-train-iris-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_iris_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'numpy==1.21.6' 'joblib==1.3.0' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_iris_model(\n    dataset: Input[Dataset],\n    model: Output[Model],\n\
+          \    metrics: Output[Metrics],\n    n_estimators: int = 100,\n    max_depth:\
+          \ int = 3,\n    random_state: int = 42\n) -> NamedTuple('ModelResults',\
+          \ [('accuracy', float), ('model_type', str), ('training_samples', int)]):\n\
+          \    \"\"\"Train Random Forest model on Iris dataset\"\"\"\n    import pandas\
+          \ as pd\n    import numpy as np\n    import json\n    import joblib\n  \
+          \  import os\n    from sklearn.ensemble import RandomForestClassifier\n\
+          \    from sklearn.metrics import accuracy_score, classification_report,\
+          \ confusion_matrix\n\n    print(\"\U0001F916 Training Random Forest model...\"\
+          )\n\n    # Load dataset\n    with open(dataset.path, 'r') as f:\n      \
+          \  data = json.load(f)\n\n    X_train = np.array(data['X_train'])\n    X_test\
+          \ = np.array(data['X_test'])\n    y_train = np.array(data['y_train'])\n\
+          \    y_test = np.array(data['y_test'])\n    feature_names = data['feature_names']\n\
+          \    target_names = data['target_names']\n\n    print(f\"\U0001F4DA Training\
+          \ data shape: {X_train.shape}\")\n    print(f\"\U0001F9EA Test data shape:\
+          \ {X_test.shape}\")\n\n    # Define model parameters\n    params = {\n \
+          \       'n_estimators': n_estimators,\n        'max_depth': max_depth,\n\
+          \        'random_state': random_state\n    }\n\n    print(f\"\u2699\uFE0F\
+          \ Model parameters: {params}\")\n\n    # Train the Random Forest model\n\
+          \    rf_model = RandomForestClassifier(**params)\n    rf_model.fit(X_train,\
+          \ y_train)\n\n    # Make predictions\n    y_pred = rf_model.predict(X_test)\n\
+          \    y_pred_proba = rf_model.predict_proba(X_test)\n\n    # Calculate metrics\n\
+          \    accuracy = accuracy_score(y_test, y_pred)\n\n    print(f\"\\n\U0001F3AF\
+          \ Model Performance:\")\n    print(f\"   Accuracy: {accuracy:.4f}\")\n\n\
+          \    # Detailed classification report\n    print(f\"\\n\U0001F4CA Classification\
+          \ Report:\")\n    report = classification_report(y_test, y_pred, target_names=target_names)\n\
+          \    print(report)\n\n    # Confusion matrix\n    cm = confusion_matrix(y_test,\
+          \ y_pred)\n    print(f\"\\n\U0001F50D Confusion Matrix:\")\n    print(cm)\n\
+          \n    # Feature importance\n    feature_importance = dict(zip(feature_names,\
+          \ rf_model.feature_importances_))\n    print(f\"\\n\U0001F31F Feature Importance:\"\
+          )\n    for feature, importance in sorted(feature_importance.items(), key=lambda\
+          \ x: x[1], reverse=True):\n        print(f\"   {feature}: {importance:.4f}\"\
+          )\n\n    # Class-wise accuracy\n    class_accuracy = {}\n    for i, class_name\
+          \ in enumerate(target_names):\n        class_mask = y_test == i\n      \
+          \  if np.sum(class_mask) > 0:\n            class_acc = accuracy_score(y_test[class_mask],\
+          \ y_pred[class_mask])\n            class_accuracy[class_name] = class_acc\n\
+          \            print(f\"   {class_name} accuracy: {class_acc:.4f}\")\n\n \
+          \   # Save the model\n    os.makedirs(model.path, exist_ok=True)\n    model_file_path\
+          \ = os.path.join(model.path, \"iris_rf_model.joblib\")\n    joblib.dump(rf_model,\
+          \ model_file_path)\n\n    # Save model metadata\n    model_metadata = {\n\
+          \        'model_type': 'RandomForestClassifier',\n        'parameters':\
+          \ params,\n        'feature_names': feature_names,\n        'target_names':\
+          \ target_names,\n        'training_samples': len(X_train),\n        'test_samples':\
+          \ len(X_test),\n        'accuracy': accuracy,\n        'feature_importance':\
+          \ feature_importance,\n        'class_accuracy': class_accuracy\n    }\n\
+          \n    metadata_path = os.path.join(model.path, \"model_metadata.json\")\n\
+          \    with open(metadata_path, 'w') as f:\n        json.dump(model_metadata,\
+          \ f, indent=2)\n\n    # Create metrics for Kubeflow tracking\n    metrics_data\
+          \ = {\n        'metrics': [\n            {'name': 'accuracy', 'numberValue':\
+          \ accuracy},\n            {'name': 'training-samples', 'numberValue': len(X_train)},\n\
+          \            {'name': 'test-samples', 'numberValue': len(X_test)},\n   \
+          \         {'name': 'n-estimators', 'numberValue': n_estimators},\n     \
+          \       {'name': 'max-depth', 'numberValue': max_depth}\n        ]\n   \
+          \ }\n\n    # Add class-specific accuracies\n    for class_name, acc in class_accuracy.items():\n\
+          \        metrics_data['metrics'].append({\n            'name': f'{class_name}-accuracy',\
+          \ \n            'numberValue': acc\n        })\n\n    with open(metrics.path,\
+          \ 'w') as f:\n        json.dump(metrics_data, f, indent=2)\n\n    print(f\"\
+          \\n\u2705 Model training completed!\")\n    print(f\"   Model saved to:\
+          \ {model_file_path}\")\n    print(f\"   Metadata saved to: {metadata_path}\"\
+          )\n\n    from collections import namedtuple\n    ModelResults = namedtuple('ModelResults',\
+          \ ['accuracy', 'model_type', 'training_samples'])\n    return ModelResults(accuracy,\
+          \ 'RandomForestClassifier', len(X_train))\n\n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.5
+          memoryLimit: 1.073741824
+    exec-validate-iris-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - validate_iris_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas==1.5.3'\
+          \ 'scikit-learn==1.3.0' 'joblib==1.3.0' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef validate_iris_model(\n    dataset: Input[Dataset],\n    model:\
+          \ Input[Model],\n    accuracy_threshold: float = 0.90\n) -> str:\n    \"\
+          \"\"Validate the trained Iris model\"\"\"\n    import pandas as pd\n   \
+          \ import numpy as np\n    import json\n    import joblib\n    import os\n\
+          \    from sklearn.metrics import accuracy_score, precision_score, recall_score,\
+          \ f1_score\n\n    print(\"\U0001F50D Validating Iris classification model...\"\
+          )\n\n    # Load the trained model\n    model_file_path = os.path.join(model.path,\
+          \ \"iris_rf_model.joblib\")\n    trained_model = joblib.load(model_file_path)\n\
+          \n    # Load metadata\n    metadata_path = os.path.join(model.path, \"model_metadata.json\"\
+          )\n    with open(metadata_path, 'r') as f:\n        metadata = json.load(f)\n\
+          \n    # Load test data\n    with open(dataset.path, 'r') as f:\n       \
+          \ data = json.load(f)\n\n    X_test = np.array(data['X_test'])\n    y_test\
+          \ = np.array(data['y_test'])\n    target_names = data['target_names']\n\n\
+          \    print(f\"\U0001F9EA Validation dataset: {len(X_test)} samples\")\n\n\
+          \    # Run comprehensive validation\n    y_pred = trained_model.predict(X_test)\n\
+          \    y_pred_proba = trained_model.predict_proba(X_test)\n\n    # Calculate\
+          \ comprehensive metrics\n    accuracy = accuracy_score(y_test, y_pred)\n\
+          \    precision = precision_score(y_test, y_pred, average='weighted')\n \
+          \   recall = recall_score(y_test, y_pred, average='weighted')\n    f1 =\
+          \ f1_score(y_test, y_pred, average='weighted')\n\n    print(f\"\\n\U0001F4CA\
+          \ Validation Metrics:\")\n    print(f\"   Accuracy: {accuracy:.4f}\")\n\
+          \    print(f\"   Precision: {precision:.4f}\")\n    print(f\"   Recall:\
+          \ {recall:.4f}\")\n    print(f\"   F1-Score: {f1:.4f}\")\n\n    # Validation\
+          \ tests\n    print(f\"\\n\U0001F9EA Validation Tests:\")\n\n    # Test 1:\
+          \ Accuracy threshold\n    accuracy_pass = accuracy >= accuracy_threshold\n\
+          \    print(f\"   \u2705 Accuracy Test: {accuracy:.4f} >= {accuracy_threshold}\
+          \ - {'PASS' if accuracy_pass else 'FAIL'}\")\n\n    # Test 2: Model consistency\
+          \ (predictions should be deterministic)\n    y_pred_2 = trained_model.predict(X_test)\n\
+          \    consistency_pass = np.array_equal(y_pred, y_pred_2)\n    print(f\"\
+          \   \u2705 Consistency Test: {'PASS' if consistency_pass else 'FAIL'}\"\
+          )\n\n    # Test 3: Prediction confidence (should be confident on Iris dataset)\n\
+          \    avg_confidence = np.mean(np.max(y_pred_proba, axis=1))\n    confidence_pass\
+          \ = avg_confidence >= 0.80\n    print(f\"   \u2705 Confidence Test: {avg_confidence:.4f}\
+          \ >= 0.80 - {'PASS' if confidence_pass else 'FAIL'}\")\n\n    # Test 4:\
+          \ Class balance in predictions\n    pred_distribution = np.bincount(y_pred)\n\
+          \    balance_pass = len(pred_distribution) == len(target_names)  # All classes\
+          \ predicted\n    print(f\"   \u2705 Class Balance Test: {'PASS' if balance_pass\
+          \ else 'FAIL'}\")\n\n    # Test 5: No obvious bias (check if any class has\
+          \ 0% accuracy)\n    class_accuracies = []\n    for i in range(len(target_names)):\n\
+          \        class_mask = y_test == i\n        if np.sum(class_mask) > 0:\n\
+          \            class_acc = accuracy_score(y_test[class_mask], y_pred[class_mask])\n\
+          \            class_accuracies.append(class_acc)\n\n    bias_pass = min(class_accuracies)\
+          \ > 0.5 if class_accuracies else False\n    print(f\"   \u2705 Bias Test:\
+          \ Min class accuracy {min(class_accuracies):.4f} > 0.5 - {'PASS' if bias_pass\
+          \ else 'FAIL'}\")\n\n    # Overall validation result\n    all_tests = [accuracy_pass,\
+          \ consistency_pass, confidence_pass, balance_pass, bias_pass]\n    overall_pass\
+          \ = all(all_tests)\n\n    validation_result = {\n        'overall_status':\
+          \ 'APPROVED' if overall_pass else 'REJECTED',\n        'accuracy': accuracy,\n\
+          \        'precision': precision,\n        'recall': recall,\n        'f1_score':\
+          \ f1,\n        'avg_confidence': avg_confidence,\n        'tests_passed':\
+          \ sum(all_tests),\n        'total_tests': len(all_tests),\n        'individual_tests':\
+          \ {\n            'accuracy_pass': accuracy_pass,\n            'consistency_pass':\
+          \ consistency_pass,\n            'confidence_pass': confidence_pass,\n \
+          \           'balance_pass': balance_pass,\n            'bias_pass': bias_pass\n\
+          \        }\n    }\n\n    print(f\"\\n\U0001F3AF VALIDATION SUMMARY:\")\n\
+          \    print(f\"   Overall Status: {'\u2705 APPROVED' if overall_pass else\
+          \ '\u274C REJECTED'}\")\n    print(f\"   Tests Passed: {sum(all_tests)}/{len(all_tests)}\"\
+          )\n\n    if overall_pass:\n        print(f\"   \U0001F389 Model meets all\
+          \ quality criteria!\")\n        print(f\"   Ready for production deployment.\"\
+          )\n        status = \"APPROVED\"\n    else:\n        print(f\"   \u26A0\uFE0F\
+          \ Model failed validation criteria:\")\n        for test_name, passed in\
+          \ validation_result['individual_tests'].items():\n            if not passed:\n\
+          \                print(f\"     - {test_name}\")\n        status = \"REJECTED\"\
+          \n\n    print(f\"\\n\u2705 Validation completed!\")\n    return status\n\
+          \n"
+        image: python:3.9-slim
+        resources:
+          cpuLimit: 0.2
+          memoryLimit: 0.268435456
+pipelineInfo:
+  description: 'Complete Iris classification pipeline: from data loading to production
+    deployment'
+  name: iris-classification-pipeline
+root:
+  dag:
+    outputs:
+      artifacts:
+        train-iris-model-metrics:
+          artifactSelectors:
+          - outputArtifactKey: metrics
+            producerSubtask: train-iris-model
+    tasks:
+      create-iris-deployment:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-create-iris-deployment
+        dependentTasks:
+        - test-iris-model
+        - train-iris-model
+        inputs:
+          artifacts:
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-iris-model
+          parameters:
+            model_name:
+              componentInputParameter: model_name
+            namespace:
+              componentInputParameter: namespace
+        taskInfo:
+          name: "\U0001F680 Create Deployment"
+      load-iris-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-iris-data
+        taskInfo:
+          name: "\U0001F338 Load Iris Data"
+      test-iris-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-test-iris-model
+        dependentTasks:
+        - load-iris-data
+        - train-iris-model
+        - validate-iris-model
+        inputs:
+          artifacts:
+            dataset:
+              taskOutputArtifact:
+                outputArtifactKey: dataset
+                producerTask: load-iris-data
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-iris-model
+        taskInfo:
+          name: "\U0001F9EA Test Model"
+      train-iris-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-iris-model
+        dependentTasks:
+        - load-iris-data
+        inputs:
+          artifacts:
+            dataset:
+              taskOutputArtifact:
+                outputArtifactKey: dataset
+                producerTask: load-iris-data
+          parameters:
+            max_depth:
+              componentInputParameter: max_depth
+            n_estimators:
+              componentInputParameter: n_estimators
+            random_state:
+              componentInputParameter: random_state
+        taskInfo:
+          name: "\U0001F916 Train RF Model"
+      validate-iris-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-validate-iris-model
+        dependentTasks:
+        - load-iris-data
+        - train-iris-model
+        inputs:
+          artifacts:
+            dataset:
+              taskOutputArtifact:
+                outputArtifactKey: dataset
+                producerTask: load-iris-data
+            model:
+              taskOutputArtifact:
+                outputArtifactKey: model
+                producerTask: train-iris-model
+          parameters:
+            accuracy_threshold:
+              componentInputParameter: accuracy_threshold
+        taskInfo:
+          name: "\U0001F50D Validate Model"
+  inputDefinitions:
+    parameters:
+      accuracy_threshold:
+        defaultValue: 0.9
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      max_depth:
+        defaultValue: 3.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      model_name:
+        defaultValue: iris-classifier
+        isOptional: true
+        parameterType: STRING
+      n_estimators:
+        defaultValue: 100.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      namespace:
+        defaultValue: default
+        isOptional: true
+        parameterType: STRING
+      random_state:
+        defaultValue: 42.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+  outputDefinitions:
+    artifacts:
+      train-iris-model-metrics:
+        artifactType:
+          schemaTitle: system.Metrics
+          schemaVersion: 0.0.1
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.5.0

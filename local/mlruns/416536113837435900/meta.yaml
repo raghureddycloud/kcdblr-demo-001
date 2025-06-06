@@ -1,0 +1,6 @@
+artifact_location: file:///Users/raghu.reddy/razor/KCD_Bengaluru/kcdblr-demo-001/local/mlruns/416536113837435900
+creation_time: 1749207378367
+experiment_id: '416536113837435900'
+last_update_time: 1749207378367
+lifecycle_stage: active
+name: iris-classification

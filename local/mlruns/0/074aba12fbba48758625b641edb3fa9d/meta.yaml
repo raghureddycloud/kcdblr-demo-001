@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/raghu.reddy/razor/KCD_Bengaluru/kcdblr-demo-001/local/mlruns/0/074aba12fbba48758625b641edb3fa9d/artifacts
+end_time: 1749206380615
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 074aba12fbba48758625b641edb3fa9d
+run_name: likeable-bug-464
+run_uuid: 074aba12fbba48758625b641edb3fa9d
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1749206376793
+status: 3
+tags: []
+user_id: raghu.reddy

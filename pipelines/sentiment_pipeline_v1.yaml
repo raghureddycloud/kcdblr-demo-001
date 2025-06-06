@@ -1,0 +1,306 @@
+# PIPELINE DEFINITION
+# Name: sentiment-analysis-pipeline
+# Description: End-to-end sentiment analysis pipeline
+components:
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      artifacts:
+        test_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        test_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        evaluation_metrics:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-extract-features:
+    executorLabel: exec-extract-features
+    inputDefinitions:
+      artifacts:
+        processed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        features_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        features_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        vectorizer_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-prepare-data:
+    executorLabel: exec-prepare-data
+    outputDefinitions:
+      artifacts:
+        processed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        features_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        features_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        test_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        test_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(\n    trained_model: Input[Dataset],\n    test_X:\
+          \ Input[Dataset],\n    test_y: Input[Dataset],\n    evaluation_metrics:\
+          \ Output[Dataset]\n):\n    \"\"\"Evaluate model performance\"\"\"\n    import\
+          \ pickle\n    from sklearn.metrics import accuracy_score\n    import json\n\
+          \n    with open(trained_model.path, 'rb') as f:\n        model = pickle.load(f)\n\
+          \    with open(test_X.path, 'rb') as f:\n        X_test = pickle.load(f)\n\
+          \    with open(test_y.path, 'rb') as f:\n        y_test = pickle.load(f)\n\
+          \n    y_pred = model.predict(X_test)\n    accuracy = accuracy_score(y_test,\
+          \ y_pred)\n\n    metrics = {'accuracy': accuracy}\n\n    with open(evaluation_metrics.path,\
+          \ 'w') as f:\n        json.dump(metrics, f)\n\n    print(f\"Model Accuracy:\
+          \ {accuracy:.2f}\")\n\n"
+        image: python:3.9-slim
+    exec-extract-features:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - extract_features
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef extract_features(\n    processed_data: Input[Dataset], \n   \
+          \ features_X: Output[Dataset],\n    features_y: Output[Dataset],\n    vectorizer_model:\
+          \ Output[Dataset]\n):\n    \"\"\"Extract features from text data\"\"\"\n\
+          \    import pandas as pd\n    import pickle\n    from sklearn.feature_extraction.text\
+          \ import TfidfVectorizer\n\n    # Load data from the input provided by KFP\n\
+          \    with open(processed_data.path, 'rb') as f:\n        df = pickle.load(f)\n\
+          \n    vectorizer = TfidfVectorizer(max_features=100, stop_words='english')\n\
+          \    X = vectorizer.fit_transform(df['review'])\n    y = df['sentiment']\n\
+          \n    # Save outputs to paths provided by KFP\n    with open(features_X.path,\
+          \ 'wb') as f:\n        pickle.dump(X, f)\n    with open(features_y.path,\
+          \ 'wb') as f:\n        pickle.dump(y, f)\n    with open(vectorizer_model.path,\
+          \ 'wb') as f:\n        pickle.dump(vectorizer, f)\n\n    print(f\"Extracted\
+          \ features with shape: {X.shape}\")\n\n"
+        image: python:3.9-slim
+    exec-prepare-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - prepare_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef prepare_data(processed_data: Output[Dataset]):\n    \"\"\"Simulate\
+          \ loading and preparing review data\"\"\"\n    import pandas as pd\n   \
+          \ import pickle\n\n    # Sample data\n    data = {\n        'review': [\n\
+          \            'This product is amazing!',\n            'Terrible quality,\
+          \ waste of money',\n            'Good value for money',\n            'Poor\
+          \ customer service',\n            'Excellent product, highly recommend',\n\
+          \            'Not worth the price',\n            'Great experience overall',\n\
+          \            'Disappointed with purchase'\n        ],\n        'sentiment':\
+          \ [1, 0, 1, 0, 1, 0, 1, 0]\n    }\n\n    df = pd.DataFrame(data)\n\n   \
+          \ # Save processed data to the output path provided by KFP\n    with open(processed_data.path,\
+          \ 'wb') as f:\n        pickle.dump(df, f)\n\n    print(f\"Processed {len(df)}\
+          \ reviews\")\n\n"
+        image: python:3.9-slim
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(\n    features_X: Input[Dataset],\n    features_y:\
+          \ Input[Dataset],\n    trained_model: Output[Dataset],\n    test_X: Output[Dataset],\n\
+          \    test_y: Output[Dataset]\n):\n    \"\"\"Train sentiment classification\
+          \ model\"\"\"\n    import pickle\n    from sklearn.linear_model import LogisticRegression\n\
+          \    from sklearn.model_selection import train_test_split\n\n    with open(features_X.path,\
+          \ 'rb') as f:\n        X = pickle.load(f)\n    with open(features_y.path,\
+          \ 'rb') as f:\n        y = pickle.load(f)\n\n    X_train, X_test, y_train,\
+          \ y_test = train_test_split(X, y, test_size=0.3, random_state=42)\n\n  \
+          \  model = LogisticRegression(random_state=42)\n    model.fit(X_train, y_train)\n\
+          \n    # Save outputs\n    with open(trained_model.path, 'wb') as f:\n  \
+          \      pickle.dump(model, f)\n    with open(test_X.path, 'wb') as f:\n \
+          \       pickle.dump(X_test, f)\n    with open(test_y.path, 'wb') as f:\n\
+          \        pickle.dump(y_test, f)\n\n    print(\"Model training completed\"\
+          )\n\n"
+        image: python:3.9-slim
+pipelineInfo:
+  description: End-to-end sentiment analysis pipeline
+  name: sentiment-analysis-pipeline
+root:
+  dag:
+    tasks:
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - train-model
+        inputs:
+          artifacts:
+            test_X:
+              taskOutputArtifact:
+                outputArtifactKey: test_X
+                producerTask: train-model
+            test_y:
+              taskOutputArtifact:
+                outputArtifactKey: test_y
+                producerTask: train-model
+            trained_model:
+              taskOutputArtifact:
+                outputArtifactKey: trained_model
+                producerTask: train-model
+        taskInfo:
+          name: evaluate-model
+      extract-features:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-extract-features
+        dependentTasks:
+        - prepare-data
+        inputs:
+          artifacts:
+            processed_data:
+              taskOutputArtifact:
+                outputArtifactKey: processed_data
+                producerTask: prepare-data
+        taskInfo:
+          name: extract-features
+      prepare-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-prepare-data
+        taskInfo:
+          name: prepare-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - extract-features
+        inputs:
+          artifacts:
+            features_X:
+              taskOutputArtifact:
+                outputArtifactKey: features_X
+                producerTask: extract-features
+            features_y:
+              taskOutputArtifact:
+                outputArtifactKey: features_y
+                producerTask: extract-features
+        taskInfo:
+          name: train-model
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.0.1

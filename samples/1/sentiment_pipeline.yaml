@@ -1,0 +1,262 @@
+# PIPELINE DEFINITION
+# Name: sentiment-analysis-pipeline
+# Description: End-to-end sentiment analysis pipeline
+components:
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      parameters:
+        model_path:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-extract-features:
+    executorLabel: exec-extract-features
+    inputDefinitions:
+      parameters:
+        data_path:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-prepare-data:
+    executorLabel: exec-prepare-data
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      parameters:
+        features_path:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(model_path: str) -> str:\n    \"\"\"Evaluate model\
+          \ performance\"\"\"\n    import pickle\n    from sklearn.metrics import\
+          \ accuracy_score\n    import json\n    import os\n\n    with open(f'{model_path}/sentiment_model.pkl',\
+          \ 'rb') as f:\n        model = pickle.load(f)\n    with open(f'{model_path}/X_test.pkl',\
+          \ 'rb') as f:\n        X_test = pickle.load(f)\n    with open(f'{model_path}/y_test.pkl',\
+          \ 'rb') as f:\n        y_test = pickle.load(f)\n\n    y_pred = model.predict(X_test)\n\
+          \    accuracy = accuracy_score(y_test, y_pred)\n\n    metrics = {'accuracy':\
+          \ accuracy}\n\n    os.makedirs('/tmp/metrics', exist_ok=True)\n    with\
+          \ open('/tmp/metrics/evaluation.json', 'w') as f:\n        json.dump(metrics,\
+          \ f)\n\n    print(f\"Model Accuracy: {accuracy:.2f}\")\n    return '/tmp/metrics/evaluation.json'\n\
+          \n"
+        image: python:3.9-slim
+    exec-extract-features:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - extract_features
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef extract_features(data_path: str) -> str:\n    \"\"\"Extract features\
+          \ from text data\"\"\"\n    import pandas as pd\n    import pickle\n   \
+          \ from sklearn.feature_extraction.text import TfidfVectorizer\n    import\
+          \ os\n\n    with open(data_path, 'rb') as f:\n        df = pickle.load(f)\n\
+          \n    vectorizer = TfidfVectorizer(max_features=100, stop_words='english')\n\
+          \    X = vectorizer.fit_transform(df['review'])\n    y = df['sentiment']\n\
+          \n    os.makedirs('/tmp/features', exist_ok=True)\n    with open('/tmp/features/X.pkl',\
+          \ 'wb') as f:\n        pickle.dump(X, f)\n    with open('/tmp/features/y.pkl',\
+          \ 'wb') as f:\n        pickle.dump(y, f)\n    with open('/tmp/features/vectorizer.pkl',\
+          \ 'wb') as f:\n        pickle.dump(vectorizer, f)\n\n    print(f\"Extracted\
+          \ features with shape: {X.shape}\")\n    return '/tmp/features'\n\n"
+        image: python:3.9-slim
+    exec-prepare-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - prepare_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef prepare_data() -> str:\n    \"\"\"Simulate loading and preparing\
+          \ review data\"\"\"\n    import pandas as pd\n    import pickle\n    import\
+          \ os\n\n    # Sample data\n    data = {\n        'review': [\n         \
+          \   'This product is amazing!',\n            'Terrible quality, waste of\
+          \ money',\n            'Good value for money',\n            'Poor customer\
+          \ service',\n            'Excellent product, highly recommend',\n      \
+          \      'Not worth the price',\n            'Great experience overall',\n\
+          \            'Disappointed with purchase'\n        ],\n        'sentiment':\
+          \ [1, 0, 1, 0, 1, 0, 1, 0]\n    }\n\n    df = pd.DataFrame(data)\n\n   \
+          \ # Save processed data\n    os.makedirs('/tmp/data', exist_ok=True)\n \
+          \   with open('/tmp/data/processed_data.pkl', 'wb') as f:\n        pickle.dump(df,\
+          \ f)\n\n    print(f\"Processed {len(df)} reviews\")\n    return '/tmp/data/processed_data.pkl'\n\
+          \n"
+        image: python:3.9-slim
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'pandas' 'scikit-learn'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(features_path: str) -> str:\n    \"\"\"Train sentiment\
+          \ classification model\"\"\"\n    import pickle\n    from sklearn.linear_model\
+          \ import LogisticRegression\n    from sklearn.model_selection import train_test_split\n\
+          \    import os\n\n    with open(f'{features_path}/X.pkl', 'rb') as f:\n\
+          \        X = pickle.load(f)\n    with open(f'{features_path}/y.pkl', 'rb')\
+          \ as f:\n        y = pickle.load(f)\n\n    X_train, X_test, y_train, y_test\
+          \ = train_test_split(X, y, test_size=0.3, random_state=42)\n\n    model\
+          \ = LogisticRegression(random_state=42)\n    model.fit(X_train, y_train)\n\
+          \n    os.makedirs('/tmp/model', exist_ok=True)\n    with open('/tmp/model/sentiment_model.pkl',\
+          \ 'wb') as f:\n        pickle.dump(model, f)\n    with open('/tmp/model/X_test.pkl',\
+          \ 'wb') as f:\n        pickle.dump(X_test, f)\n    with open('/tmp/model/y_test.pkl',\
+          \ 'wb') as f:\n        pickle.dump(y_test, f)\n\n    print(\"Model training\
+          \ completed\")\n    return '/tmp/model'\n\n"
+        image: python:3.9-slim
+pipelineInfo:
+  description: End-to-end sentiment analysis pipeline
+  name: sentiment-analysis-pipeline
+root:
+  dag:
+    tasks:
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - train-model
+        inputs:
+          parameters:
+            model_path:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-model
+        taskInfo:
+          name: evaluate-model
+      extract-features:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-extract-features
+        dependentTasks:
+        - prepare-data
+        inputs:
+          parameters:
+            data_path:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: prepare-data
+        taskInfo:
+          name: extract-features
+      prepare-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-prepare-data
+        taskInfo:
+          name: prepare-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - extract-features
+        inputs:
+          parameters:
+            features_path:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: extract-features
+        taskInfo:
+          name: train-model
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.5.0
