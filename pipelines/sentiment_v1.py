@@ -169,6 +169,6 @@ def sentiment_pipeline():
 if __name__ == '__main__':
     # Compile the pipeline
     from kfp import compiler
-    compiler.Compiler().compile(sentiment_pipeline, 'sentiment_pipeline_output.yaml')
+    compiler.Compiler().compile(sentiment_pipeline, 'sentiment_pipeline_v1.yaml')
     print("Pipeline compiled successfully!")
 #with input and output

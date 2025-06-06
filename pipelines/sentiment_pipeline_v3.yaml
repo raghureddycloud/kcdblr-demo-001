@@ -1,0 +1,524 @@
+# PIPELINE DEFINITION
+# Name: sentiment-analysis-pipeline
+# Description: End-to-end sentiment analysis pipeline
+components:
+  comp-deploy-to-kserve:
+    executorLabel: exec-deploy-to-kserve
+    inputDefinitions:
+      artifacts:
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        vectorizer_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        deployment_status:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      artifacts:
+        test_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        test_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        evaluation_metrics:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-extract-features:
+    executorLabel: exec-extract-features
+    inputDefinitions:
+      artifacts:
+        processed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        features_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        features_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        vectorizer_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-prepare-data:
+    executorLabel: exec-prepare-data
+    outputDefinitions:
+      artifacts:
+        processed_data:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        features_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        features_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        test_X:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        test_y:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-verify-model:
+    executorLabel: exec-verify-model
+    inputDefinitions:
+      artifacts:
+        trained_model:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-deploy-to-kserve:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - deploy_to_kserve
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'kubernetes>=20.0.0,<26.0.0'\
+          \ 'pyyaml==6.0.1' 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef deploy_to_kserve(\n    trained_model: Input[Dataset],\n    vectorizer_model:\
+          \ Input[Dataset],\n    deployment_status: Output[Dataset]\n):\n    \"\"\"\
+          Deploy model to KServe in app-dev-001 namespace\"\"\"\n    import pickle\n\
+          \    import yaml\n    import json\n    import base64\n    from kubernetes\
+          \ import client, config\n    from kubernetes.client.rest import ApiException\n\
+          \    import time\n\n    try:\n        # Load Kubernetes config (assumes\
+          \ in-cluster config)\n        config.load_incluster_config()\n    except:\n\
+          \        # Fallback to local config for testing\n        config.load_kube_config()\n\
+          \n    v1 = client.CoreV1Api()\n    custom_api = client.CustomObjectsApi()\n\
+          \n    # Load model artifacts\n    with open(trained_model.path, 'rb') as\
+          \ f:\n        model_data = pickle.load(f)\n    with open(vectorizer_model.path,\
+          \ 'rb') as f:\n        vectorizer_data = pickle.load(f)\n\n    # Serialize\
+          \ models to bytes for ConfigMap\n    model_bytes = pickle.dumps(model_data)\n\
+          \    vectorizer_bytes = pickle.dumps(vectorizer_data)\n\n    # Encode as\
+          \ base64 for ConfigMap storage\n    model_b64 = base64.b64encode(model_bytes).decode('utf-8')\n\
+          \    vectorizer_b64 = base64.b64encode(vectorizer_bytes).decode('utf-8')\n\
+          \n    namespace = \"app-dev-001\"\n    configmap_name = \"sentiment-model-artifacts\"\
+          \n    service_name = \"sentiment-classifier\"\n\n    # Create namespace\
+          \ if it doesn't exist\n    try:\n        v1.read_namespace(name=namespace)\n\
+          \        print(f\"Namespace {namespace} already exists\")\n    except ApiException\
+          \ as e:\n        if e.status == 404:\n            namespace_body = client.V1Namespace(\n\
+          \                metadata=client.V1ObjectMeta(name=namespace)\n        \
+          \    )\n            v1.create_namespace(body=namespace_body)\n         \
+          \   print(f\"Created namespace {namespace}\")\n        else:\n         \
+          \   raise e\n\n    # Create/Update ConfigMap with model artifacts\n    configmap_body\
+          \ = client.V1ConfigMap(\n        metadata=client.V1ObjectMeta(\n       \
+          \     name=configmap_name,\n            namespace=namespace\n        ),\n\
+          \        binary_data={\n            \"sentiment_model.pkl\": model_b64,\n\
+          \            \"vectorizer.pkl\": vectorizer_b64\n        }\n    )\n\n  \
+          \  try:\n        v1.replace_namespaced_config_map(\n            name=configmap_name,\n\
+          \            namespace=namespace,\n            body=configmap_body\n   \
+          \     )\n        print(f\"Updated ConfigMap {configmap_name}\")\n    except\
+          \ ApiException as e:\n        if e.status == 404:\n            v1.create_namespaced_config_map(\n\
+          \                namespace=namespace,\n                body=configmap_body\n\
+          \            )\n            print(f\"Created ConfigMap {configmap_name}\"\
+          )\n        else:\n            raise e\n\n    # Create InferenceService\n\
+          \    inference_service = {\n        \"apiVersion\": \"serving.kserve.io/v1beta1\"\
+          ,\n        \"kind\": \"InferenceService\",\n        \"metadata\": {\n  \
+          \          \"name\": service_name,\n            \"namespace\": namespace\n\
+          \        },\n        \"spec\": {\n            \"predictor\": {\n       \
+          \         \"containers\": [\n                    {\n                   \
+          \     \"name\": \"kserve-container\",\n                        \"image\"\
+          : \"243571642843.dkr.ecr.us-west-2.amazonaws.com/sentiment-predictor:latest\"\
+          ,\n                        \"ports\": [\n                            {\n\
+          \                                \"containerPort\": 8080,\n            \
+          \                    \"protocol\": \"TCP\"\n                           \
+          \ }\n                        ],\n                        \"volumeMounts\"\
+          : [\n                            {\n                                \"name\"\
+          : \"model-storage\",\n                                \"mountPath\": \"\
+          /mnt/models\"\n                            }\n                        ]\n\
+          \                    }\n                ],\n                \"volumes\"\
+          : [\n                    {\n                        \"name\": \"model-storage\"\
+          ,\n                        \"configMap\": {\n                          \
+          \  \"name\": configmap_name\n                        }\n               \
+          \     }\n                ]\n            }\n        }\n    }\n\n    # Deploy\
+          \ InferenceService\n    try:\n        custom_api.replace_namespaced_custom_object(\n\
+          \            group=\"serving.kserve.io\",\n            version=\"v1beta1\"\
+          ,\n            namespace=namespace,\n            plural=\"inferenceservices\"\
+          ,\n            name=service_name,\n            body=inference_service\n\
+          \        )\n        print(f\"Updated InferenceService {service_name}\")\n\
+          \    except ApiException as e:\n        if e.status == 404:\n          \
+          \  custom_api.create_namespaced_custom_object(\n                group=\"\
+          serving.kserve.io\",\n                version=\"v1beta1\",\n           \
+          \     namespace=namespace,\n                plural=\"inferenceservices\"\
+          ,\n                body=inference_service\n            )\n            print(f\"\
+          Created InferenceService {service_name}\")\n        else:\n            raise\
+          \ e\n\n    # Wait for deployment to be ready (basic check)\n    max_wait\
+          \ = 300  # 5 minutes\n    wait_time = 0\n\n    while wait_time < max_wait:\n\
+          \        try:\n            service_status = custom_api.get_namespaced_custom_object(\n\
+          \                group=\"serving.kserve.io\",\n                version=\"\
+          v1beta1\",\n                namespace=namespace,\n                plural=\"\
+          inferenceservices\",\n                name=service_name\n            )\n\
+          \n            status = service_status.get(\"status\", {})\n            conditions\
+          \ = status.get(\"conditions\", [])\n\n            for condition in conditions:\n\
+          \                if condition.get(\"type\") == \"Ready\" and condition.get(\"\
+          status\") == \"True\":\n                    print(f\"InferenceService {service_name}\
+          \ is ready!\")\n                    deployment_result = {\n            \
+          \            \"status\": \"success\",\n                        \"service_name\"\
+          : service_name,\n                        \"namespace\": namespace,\n   \
+          \                     \"endpoint\": f\"http://{service_name}.{namespace}.svc.cluster.local/v1/models/{service_name}:predict\"\
+          ,\n                        \"ready_time\": wait_time\n                 \
+          \   }\n\n                    with open(deployment_status.path, 'w') as f:\n\
+          \                        json.dump(deployment_result, f)\n\n           \
+          \         return\n\n            print(f\"Waiting for service to be ready...\
+          \ ({wait_time}s)\")\n            time.sleep(10)\n            wait_time +=\
+          \ 10\n\n        except ApiException as e:\n            print(f\"Error checking\
+          \ service status: {e}\")\n            time.sleep(10)\n            wait_time\
+          \ += 10\n\n    # Timeout reached\n    deployment_result = {\n        \"\
+          status\": \"timeout\",\n        \"service_name\": service_name,\n      \
+          \  \"namespace\": namespace,\n        \"message\": f\"Service deployment\
+          \ timed out after {max_wait} seconds\"\n    }\n\n    with open(deployment_status.path,\
+          \ 'w') as f:\n        json.dump(deployment_result, f)\n\n"
+        image: python:3.9-slim
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(\n    trained_model: Input[Dataset],\n    test_X:\
+          \ Input[Dataset],\n    test_y: Input[Dataset],\n    evaluation_metrics:\
+          \ Output[Dataset]\n):\n    \"\"\"Evaluate model performance\"\"\"\n    import\
+          \ pickle\n    from sklearn.metrics import accuracy_score\n    import json\n\
+          \n    with open(trained_model.path, 'rb') as f:\n        model = pickle.load(f)\n\
+          \    with open(test_X.path, 'rb') as f:\n        X_test = pickle.load(f)\n\
+          \    with open(test_y.path, 'rb') as f:\n        y_test = pickle.load(f)\n\
+          \n    y_pred = model.predict(X_test)\n    accuracy = accuracy_score(y_test,\
+          \ y_pred)\n\n    metrics = {'accuracy': accuracy}\n\n    with open(evaluation_metrics.path,\
+          \ 'w') as f:\n        json.dump(metrics, f)\n\n    print(f\"Model Accuracy:\
+          \ {accuracy:.2f}\")\n\n"
+        image: python:3.9-slim
+    exec-extract-features:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - extract_features
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef extract_features(\n    processed_data: Input[Dataset], \n   \
+          \ features_X: Output[Dataset],\n    features_y: Output[Dataset],\n    vectorizer_model:\
+          \ Output[Dataset]\n):\n    \"\"\"Extract features from text data\"\"\"\n\
+          \    import pandas as pd\n    import pickle\n    from sklearn.feature_extraction.text\
+          \ import TfidfVectorizer\n\n    # Load data from the input provided by KFP\n\
+          \    with open(processed_data.path, 'rb') as f:\n        df = pickle.load(f)\n\
+          \n    vectorizer = TfidfVectorizer(max_features=100, stop_words='english')\n\
+          \    X = vectorizer.fit_transform(df['review'])\n    y = df['sentiment']\n\
+          \n    # Save outputs to paths provided by KFP\n    with open(features_X.path,\
+          \ 'wb') as f:\n        pickle.dump(X, f)\n    with open(features_y.path,\
+          \ 'wb') as f:\n        pickle.dump(y, f)\n    with open(vectorizer_model.path,\
+          \ 'wb') as f:\n        pickle.dump(vectorizer, f)\n\n    print(f\"Extracted\
+          \ features with shape: {X.shape}\")\n\n"
+        image: python:3.9-slim
+    exec-prepare-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - prepare_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef prepare_data(processed_data: Output[Dataset]):\n    \"\"\"Simulate\
+          \ loading and preparing review data\"\"\"\n    import pandas as pd\n   \
+          \ import pickle\n\n    # Sample data\n    data = {\n        'review': [\n\
+          \            'This product is amazing!',\n            'Terrible quality,\
+          \ waste of money',\n            'Good value for money',\n            'Poor\
+          \ customer service',\n            'Excellent product, highly recommend',\n\
+          \            'Not worth the price',\n            'Great experience overall',\n\
+          \            'Disappointed with purchase'\n        ],\n        'sentiment':\
+          \ [1, 0, 1, 0, 1, 0, 1, 0]\n    }\n\n    df = pd.DataFrame(data)\n\n   \
+          \ # Save processed data to the output path provided by KFP\n    with open(processed_data.path,\
+          \ 'wb') as f:\n        pickle.dump(df, f)\n\n    print(f\"Processed {len(df)}\
+          \ reviews\")\n\n"
+        image: python:3.9-slim
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'pandas'\
+          \ 'scikit-learn' 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(\n    features_X: Input[Dataset],\n    features_y:\
+          \ Input[Dataset],\n    trained_model: Output[Dataset],\n    test_X: Output[Dataset],\n\
+          \    test_y: Output[Dataset]\n):\n    \"\"\"Train sentiment classification\
+          \ model\"\"\"\n    import pickle\n    from sklearn.linear_model import LogisticRegression\n\
+          \    from sklearn.model_selection import train_test_split\n\n    with open(features_X.path,\
+          \ 'rb') as f:\n        X = pickle.load(f)\n    with open(features_y.path,\
+          \ 'rb') as f:\n        y = pickle.load(f)\n\n    X_train, X_test, y_train,\
+          \ y_test = train_test_split(X, y, test_size=0.3, random_state=42)\n\n  \
+          \  model = LogisticRegression(random_state=42)\n    model.fit(X_train, y_train)\n\
+          \n    # Save outputs\n    with open(trained_model.path, 'wb') as f:\n  \
+          \      pickle.dump(model, f)\n    with open(test_X.path, 'wb') as f:\n \
+          \       pickle.dump(X_test, f)\n    with open(test_y.path, 'wb') as f:\n\
+          \        pickle.dump(y_test, f)\n\n    print(\"Model training completed\"\
+          )\n\n"
+        image: python:3.9-slim
+    exec-verify-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - verify_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet     --no-warn-script-location 'scikit-learn'\
+          \ 'kfp==2.0.1' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          python3 -m kfp.components.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef verify_model(trained_model: Input[Dataset]):\n    \"\"\"Verify\
+          \ the model was saved correctly\"\"\"\n    import pickle\n\n    # Load the\
+          \ model\n    with open(trained_model.path, 'rb') as f:\n        model =\
+          \ pickle.load(f)\n\n    # Check model properties\n    print(f\" Model loaded\
+          \ successfully!\")\n    print(f\"Model type: {type(model).__name__}\")\n\
+          \    print(f\"Model classes: {model.classes_}\")\n    print(f\"Number of\
+          \ features: {model.n_features_in_}\")\n    print(f\"Model coefficients shape:\
+          \ {model.coef_.shape}\")\n\n    # Test prediction capability\n    import\
+          \ numpy as np\n    dummy_input = np.random.random((1, model.n_features_in_))\n\
+          \    prediction = model.predict(dummy_input)\n    probability = model.predict_proba(dummy_input)\n\
+          \n    print(f\"Test prediction: {prediction[0]}\")\n    print(f\"Test probabilities:\
+          \ {probability[0]}\")\n    print(\"Model verification completed successfully!\"\
+          )\n\n"
+        image: python:3.9-slim
+pipelineInfo:
+  description: End-to-end sentiment analysis pipeline
+  name: sentiment-analysis-pipeline
+root:
+  dag:
+    tasks:
+      deploy-to-kserve:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-deploy-to-kserve
+        dependentTasks:
+        - extract-features
+        - train-model
+        - verify-model
+        inputs:
+          artifacts:
+            trained_model:
+              taskOutputArtifact:
+                outputArtifactKey: trained_model
+                producerTask: train-model
+            vectorizer_model:
+              taskOutputArtifact:
+                outputArtifactKey: vectorizer_model
+                producerTask: extract-features
+        taskInfo:
+          name: deploy-to-kserve
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - train-model
+        inputs:
+          artifacts:
+            test_X:
+              taskOutputArtifact:
+                outputArtifactKey: test_X
+                producerTask: train-model
+            test_y:
+              taskOutputArtifact:
+                outputArtifactKey: test_y
+                producerTask: train-model
+            trained_model:
+              taskOutputArtifact:
+                outputArtifactKey: trained_model
+                producerTask: train-model
+        taskInfo:
+          name: evaluate-model
+      extract-features:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-extract-features
+        dependentTasks:
+        - prepare-data
+        inputs:
+          artifacts:
+            processed_data:
+              taskOutputArtifact:
+                outputArtifactKey: processed_data
+                producerTask: prepare-data
+        taskInfo:
+          name: extract-features
+      prepare-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-prepare-data
+        taskInfo:
+          name: prepare-data
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - extract-features
+        inputs:
+          artifacts:
+            features_X:
+              taskOutputArtifact:
+                outputArtifactKey: features_X
+                producerTask: extract-features
+            features_y:
+              taskOutputArtifact:
+                outputArtifactKey: features_y
+                producerTask: extract-features
+        taskInfo:
+          name: train-model
+      verify-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-verify-model
+        dependentTasks:
+        - evaluate-model
+        - train-model
+        inputs:
+          artifacts:
+            trained_model:
+              taskOutputArtifact:
+                outputArtifactKey: trained_model
+                producerTask: train-model
+        taskInfo:
+          name: verify-model
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.0.1

@@ -139,6 +139,7 @@ def evaluate_model(
     
     print(f"Model Accuracy: {accuracy:.2f}")
 
+
 @component(
     base_image="python:3.9-slim", 
     packages_to_install=["scikit-learn"]
@@ -152,11 +153,11 @@ def verify_model(trained_model: Input[Dataset]):
         model = pickle.load(f)
     
     # Check model properties
-    print(f"✅ Model loaded successfully!")
-    print(f"📊 Model type: {type(model).__name__}")
-    print(f"🎯 Model classes: {model.classes_}")
-    print(f"🔢 Number of features: {model.n_features_in_}")
-    print(f"⚙️  Model coefficients shape: {model.coef_.shape}")
+    print(f" Model loaded successfully!")
+    print(f"Model type: {type(model).__name__}")
+    print(f"Model classes: {model.classes_}")
+    print(f"Number of features: {model.n_features_in_}")
+    print(f"Model coefficients shape: {model.coef_.shape}")
     
     # Test prediction capability
     import numpy as np
@@ -164,9 +165,9 @@ def verify_model(trained_model: Input[Dataset]):
     prediction = model.predict(dummy_input)
     probability = model.predict_proba(dummy_input)
     
-    print(f"🧪 Test prediction: {prediction[0]}")
-    print(f"🎲 Test probabilities: {probability[0]}")
-    print("✅ Model verification completed successfully!")
+    print(f"Test prediction: {prediction[0]}")
+    print(f"Test probabilities: {probability[0]}")
+    print("Model verification completed successfully!")
 
 # Define the Pipeline
 @pipeline(
@@ -195,9 +196,16 @@ def sentiment_pipeline():
         test_y=training_task.outputs['test_y']
     )
 
+    # Step 5: verify_model
+    verify_task = verify_model(
+        trained_model=training_task.outputs['trained_model']
+    )
+    verify_task.after(evaluation_task)
+    
+
 if __name__ == '__main__':
     # Compile the pipeline
     from kfp import compiler
-    compiler.Compiler().compile(sentiment_pipeline, 'sentiment_pipeline_output.yaml')
+    compiler.Compiler().compile(sentiment_pipeline, 'sentiment_pipeline_v2.yaml')
     print("Pipeline compiled successfully!")
-#with input and output
+# Verify Model
