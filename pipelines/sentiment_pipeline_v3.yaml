@@ -137,9 +137,9 @@ deploymentSpec:
           Deploy model to KServe in app-dev-001 namespace\"\"\"\n    import pickle\n\
           \    import yaml\n    import json\n    import base64\n    from kubernetes\
           \ import client, config\n    from kubernetes.client.rest import ApiException\n\
-          \    import time\n\n    try:\n        # Load Kubernetes config (assumes\
-          \ in-cluster config)\n        config.load_incluster_config()\n    except:\n\
-          \        # Fallback to local config for testing\n        config.load_kube_config()\n\
+          \    import time\n    import os\n\n    try:\n        # Load Kubernetes config\
+          \ (assumes in-cluster config)\n        config.load_incluster_config()\n\
+          \    except:\n        # Fallback to local config for testing\n        config.load_kube_config()\n\
           \n    v1 = client.CoreV1Api()\n    custom_api = client.CustomObjectsApi()\n\
           \n    # Load model artifacts\n    with open(trained_model.path, 'rb') as\
           \ f:\n        model_data = pickle.load(f)\n    with open(vectorizer_model.path,\
@@ -148,9 +148,9 @@ deploymentSpec:
           \    vectorizer_bytes = pickle.dumps(vectorizer_data)\n\n    # Encode as\
           \ base64 for ConfigMap storage\n    model_b64 = base64.b64encode(model_bytes).decode('utf-8')\n\
           \    vectorizer_b64 = base64.b64encode(vectorizer_bytes).decode('utf-8')\n\
-          \n    namespace = \"app-dev-001\"\n    configmap_name = \"sentiment-model-artifacts\"\
-          \n    service_name = \"sentiment-classifier\"\n\n    # Create namespace\
-          \ if it doesn't exist\n    try:\n        v1.read_namespace(name=namespace)\n\
+          \n    namespace = \"kubeflow-user-example-com\"\n    configmap_name = \"\
+          sentiment-model-artifacts-deploy\"\n    service_name = \"sentiment-classifier-deploy\"\
+          \n\n    # Create namespace if it doesn't exist\n    try:\n        v1.read_namespace(name=namespace)\n\
           \        print(f\"Namespace {namespace} already exists\")\n    except ApiException\
           \ as e:\n        if e.status == 404:\n            namespace_body = client.V1Namespace(\n\
           \                metadata=client.V1ObjectMeta(name=namespace)\n        \
@@ -173,8 +173,8 @@ deploymentSpec:
           \          \"name\": service_name,\n            \"namespace\": namespace\n\
           \        },\n        \"spec\": {\n            \"predictor\": {\n       \
           \         \"containers\": [\n                    {\n                   \
-          \     \"name\": \"kserve-container\",\n                        \"image\"\
-          : \"243571642843.dkr.ecr.us-west-2.amazonaws.com/sentiment-predictor:latest\"\
+          \     \"name\": \"kserve-container-deploy\",\n                        \"\
+          image\": \"243571642843.dkr.ecr.us-west-2.amazonaws.com/sentiment-predictor:latest\"\
           ,\n                        \"ports\": [\n                            {\n\
           \                                \"containerPort\": 8080,\n            \
           \                    \"protocol\": \"TCP\"\n                           \
@@ -222,7 +222,7 @@ deploymentSpec:
           \ += 10\n\n    # Timeout reached\n    deployment_result = {\n        \"\
           status\": \"timeout\",\n        \"service_name\": service_name,\n      \
           \  \"namespace\": namespace,\n        \"message\": f\"Service deployment\
-          \ timed out after {max_wait} seconds\"\n    }\n\n    with open(deployment_status.path,\
+          \ timed out after {max_wait} seconds time\"\n    }\n\n    with open(deployment_status.path,\
           \ 'w') as f:\n        json.dump(deployment_result, f)\n\n"
         image: python:3.9-slim
     exec-evaluate-model:

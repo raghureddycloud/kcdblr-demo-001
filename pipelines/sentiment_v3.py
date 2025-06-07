@@ -187,6 +187,7 @@ def deploy_to_kserve(
     from kubernetes import client, config
     from kubernetes.client.rest import ApiException
     import time
+    import os
     
     try:
         # Load Kubernetes config (assumes in-cluster config)
@@ -212,9 +213,9 @@ def deploy_to_kserve(
     model_b64 = base64.b64encode(model_bytes).decode('utf-8')
     vectorizer_b64 = base64.b64encode(vectorizer_bytes).decode('utf-8')
     
-    namespace = "app-dev-001"
-    configmap_name = "sentiment-model-artifacts"
-    service_name = "sentiment-classifier"
+    namespace = "kubeflow-user-example-com"
+    configmap_name = "sentiment-model-artifacts-deploy"
+    service_name = "sentiment-classifier-deploy"
     
     # Create namespace if it doesn't exist
     try:
@@ -271,7 +272,7 @@ def deploy_to_kserve(
             "predictor": {
                 "containers": [
                     {
-                        "name": "kserve-container",
+                        "name": "kserve-container-deploy",
                         "image": "243571642843.dkr.ecr.us-west-2.amazonaws.com/sentiment-predictor:latest",
                         "ports": [
                             {
@@ -370,7 +371,7 @@ def deploy_to_kserve(
         "status": "timeout",
         "service_name": service_name,
         "namespace": namespace,
-        "message": f"Service deployment timed out after {max_wait} seconds"
+        "message": f"Service deployment timed out after {max_wait} seconds time"
     }
     
     with open(deployment_status.path, 'w') as f:

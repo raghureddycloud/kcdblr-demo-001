@@ -1,0 +1,30 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: sentiment-classifier
+  namespace: kubeflow-user-example-com
+spec:
+  predictor:
+    containers:
+    - name: kserve-container
+      image: 243571642843.dkr.ecr.us-west-2.amazonaws.com/sentiment-predictor:latest
+      ports:
+      - containerPort: 8080
+        protocol: TCP
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      volumeMounts:
+      - name: model-storage
+        mountPath: /mnt/models
+      env:
+      - name: PYTHONUNBUFFERED
+        value: "1"
+    volumes:
+    - name: model-storage
+      configMap:
+        name: sentiment-model-artifacts-cn
